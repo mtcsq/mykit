@@ -1,0 +1,14 @@
+{
+  "name": "mykit",
+  "version": "0.1.0",
+  "description": "A dependency-free video template renderer: headless Chrome + CDP + FFmpeg",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "bin": { "mykit": "src/cli.mjs" },
+  "files": ["src", "spec", "templates", "README.md", "LICENSE"],
+  "scripts": {
+    "doctor": "node src/cli.mjs doctor",
+    "test": "node --test"
+  }
+}
