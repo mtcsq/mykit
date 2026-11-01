@@ -28,12 +28,20 @@ node src/cli.mjs doctor    # 体检：node / 浏览器 / ffmpeg / 内置 WebSock
 ## 状态
 
 - [x] Phase 0 骨架 + `doctor`
-- [ ] Phase 1 CDP 客户端 + 自适应 ready
-- [ ] Phase 2 单帧渲染（canvas / dom 两条路径）
-- [ ] Phase 3 串行编码 + 音轨挂载
-- [ ] Phase 4 并发分片（一 worker 一浏览器 / 轮转 / 断点续跑）
+- [x] Phase 1 CDP 客户端 + 自适应 ready（4 种信号全命中）
+- [x] Phase 2 单帧渲染（实测决定 canvas / dom，不看 profile 声明）
+- [x] Phase 3 串行编码（873：254 帧 / 1080p / 30fps / bt709）
+- [x] Phase 4 并发分片（canvas 靶子串行 vs 4 worker 画面 MD5 相同；短片刻意串行）
 - [ ] Phase 5 自有契约 + 静态检查
 - [ ] Phase 6 第一个自有模板 `ops-replay`
+- [ ] 音轨挂载 `--audio`
+
+### 已知的坑（实测）
+
+- **profile 声明不可信**：873 写 `html-canvas/1`，页面 canvas 数为 0，必须实测
+- **确定性分级**：canvas 路径逐字节一致；dom 路径只能按 PSNR ≥ 48 dB 判定
+- **必须等字体**：`font-display:block` 的模板不等 `document.fonts.ready` 会缺字
+- **并发有启动成本**：每 worker ≈ 5–6 秒，帧数 < 400 用串行更快
 
 完整蓝图见仓库外层的 `10-自建渲染体系-实施方案.md`（v1.1）。
 

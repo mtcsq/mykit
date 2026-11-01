@@ -1,0 +1,296 @@
+/**
+ * 最小 CDP 客户端：DevToolsActivePort -> WebSocket -> Runtime.evaluate / Page.navigate。
+ *
+ * 思路参考 891 的 adapter.mjs（零依赖、读 DevToolsActivePort、Runtime.evaluate 逐帧驱动）。
+ * 增量：ready 信号自适应探测（4 个真实包 4 种写法，见方案 v1.1 Phase 1）。代码为全新实现。
+ */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** 一次 evaluate 拿到所有候选状态，避免多次往返。 */
+const PROBE_EXPR =
+  '(function(){return {' +
+  'motion:window.__MOTION_READY===true,' +
+  'promise:!!window.__readyPromise,' +
+  'ready:!!(window.ready&&typeof window.ready.then==="function"),' +
+  'READY:window.READY===true,' +
+  'state:document.readyState,' +
+  'title:document.title,' +
+  'error:(window.__lastError&&String(window.__lastError.message||window.__lastError))||null' +
+  '};})()';
+
+export class ReadyTimeoutError extends Error {
+  constructor(message, detail) {
+    super(message);
+    this.name = 'ReadyTimeoutError';
+    this.detail = detail;
+  }
+}
+
+export class CdpError extends Error {
+  constructor(message, detail) {
+    super(message);
+    this.name = 'CdpError';
+    this.detail = detail;
+  }
+}
+
+async function readDevToolsPort(profileDir, child, timeoutMs) {
+  const file = path.join(profileDir, 'DevToolsActivePort');
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (child.exitCode !== null) {
+      throw new CdpError('浏览器启动即退出（exit ' + child.exitCode + '）', { profileDir });
+    }
+    if (fs.existsSync(file)) {
+      const [port] = fs.readFileSync(file, 'utf8').split('\n');
+      if (port && Number(port) > 0) return Number(port);
+    }
+    await sleep(50);
+  }
+  throw new CdpError('等待 DevToolsActivePort 超时', { profileDir, timeoutMs });
+}
+
+/**
+ * 启动 headless 浏览器并连接第一个 page target。
+ */
+export async function launch(options = {}) {
+  const executable = options.executable;
+  if (!executable) throw new CdpError('缺少 executable');
+
+  const width = options.width ?? 1920;
+  const height = options.height ?? 1080;
+  const profileDir = options.profileDir || fs.mkdtempSync(path.join(os.tmpdir(), 'mykit-chrome-'));
+  fs.mkdirSync(profileDir, { recursive: true });
+
+  const args = [
+    '--headless=new',
+    '--remote-debugging-port=0',
+    '--remote-debugging-address=127.0.0.1',
+    '--user-data-dir=' + profileDir,
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-background-networking',
+    '--disable-background-timer-throttling',
+    '--disable-renderer-backgrounding',
+    '--disable-features=Translate,MediaRouter',
+    '--hide-scrollbars',
+    '--mute-audio',
+    '--force-color-profile=srgb',
+    '--window-size=' + width + ',' + height,
+    ...(process.env.MYKIT_CHROME_ARGS ? process.env.MYKIT_CHROME_ARGS.split(',').filter(Boolean) : []),
+    ...(options.args || []),
+    'about:blank',
+  ];
+
+  const child = spawn(executable, args, { windowsHide: true, stdio: 'ignore' });
+  const startupTimeout = options.startupTimeout ?? 25000;
+
+  let socket;
+  let nextId = 0;
+  const pending = new Map();
+  const errors = [];
+  const consoleErrors = [];
+
+  const send = (method, params = {}, timeoutMs = 30000) =>
+    new Promise((resolve, reject) => {
+      const id = (nextId += 1);
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new CdpError('CDP 超时：' + method, { method }));
+      }, timeoutMs);
+      pending.set(id, { resolve, reject, timer });
+      socket.send(JSON.stringify({ id, method, params }));
+    });
+
+  try {
+    const port = await readDevToolsPort(profileDir, child, startupTimeout);
+    const list = await (await fetch('http://127.0.0.1:' + port + '/json/list')).json();
+    const target = list.find((t) => t.type === 'page');
+    if (!target) throw new CdpError('没有 page target', { targets: list.length });
+
+    socket = new WebSocket(target.webSocketDebuggerUrl);
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new CdpError('WebSocket 握手超时')), 15000);
+      socket.addEventListener('open', () => {
+        clearTimeout(timer);
+        resolve();
+      }, { once: true });
+      socket.addEventListener('error', (event) => {
+        clearTimeout(timer);
+        reject(new CdpError('WebSocket 错误', { event: String(event && event.type) }));
+      }, { once: true });
+    });
+
+    socket.addEventListener('message', (event) => {
+      let msg;
+      try {
+        msg = JSON.parse(String(event.data));
+      } catch {
+        return;
+      }
+      if (msg.id) {
+        const entry = pending.get(msg.id);
+        if (!entry) return;
+        clearTimeout(entry.timer);
+        pending.delete(msg.id);
+        if (msg.error) entry.reject(new CdpError('CDP 失败：' + JSON.stringify(msg.error), msg.error));
+        else entry.resolve(msg.result);
+        return;
+      }
+      if (msg.method === 'Runtime.exceptionThrown') {
+        const d = msg.params && msg.params.exceptionDetails;
+        errors.push((d && (d.text || (d.exception && d.exception.description))) || 'exception');
+      }
+      if (msg.method === 'Runtime.consoleAPICalled' && msg.params && msg.params.type === 'error') {
+        consoleErrors.push((msg.params.args || []).map((a) => a.value ?? a.description ?? '').join(' '));
+      }
+    });
+
+    await send('Runtime.enable');
+    await send('Page.enable');
+    await send('Emulation.setDeviceMetricsOverride', {
+      width,
+      height,
+      deviceScaleFactor: options.deviceScaleFactor ?? 1,
+      mobile: false,
+    });
+
+    const page = {
+      port,
+      profileDir,
+      errors,
+      consoleErrors,
+      send,
+      async evaluate(expression, evalOptions = {}) {
+        const result = await send('Runtime.evaluate', {
+          expression,
+          awaitPromise: evalOptions.awaitPromise !== false,
+          returnByValue: true,
+          userGesture: true,
+        });
+        if (result.exceptionDetails) {
+          const d = result.exceptionDetails;
+          throw new CdpError(
+            '页面求值抛错：' + (d.exception ? d.exception.description || d.exception.value : d.text),
+            { expression: expression.slice(0, 200) },
+          );
+        }
+        return result.result ? result.result.value : undefined;
+      },
+      async navigate(url) {
+        const loaded = new Promise((resolve) => {
+          const handler = (msg) => {
+            if (msg.method === 'Page.loadEventFired') {
+              socket.removeEventListener('message', handler);
+              resolve();
+            }
+          };
+          socket.addEventListener('message', handler);
+          setTimeout(() => {
+            socket.removeEventListener('message', handler);
+            resolve();
+          }, 20000);
+        });
+        await send('Page.navigate', { url });
+        await loaded;
+      },
+      async close() {
+        try {
+          await send('Browser.close', {}, 5000);
+        } catch {
+          /* 忽略：下面 kill 兜底 */
+        }
+        socket.close();
+        if (child.exitCode === null) child.kill();
+        await sleep(100);
+      },
+    };
+
+    return page;
+  } catch (error) {
+    if (socket) socket.close();
+    if (child.exitCode === null) child.kill();
+    throw error;
+  }
+}
+
+/**
+ * 让这一帧真正落到画面上再截图。
+ *
+ * 原因（实测）：GSAP 默认 lazy 渲染，seek 之后样式要在下一帧才写完。先渲 119 再渲 120，
+ * 立即截图会拍到 119 的残留；先渲 0 再渲 120 就不会。等两个 rAF 再补一次强制布局即可消除。
+ */
+export async function awaitSettle(page, frames = 2) {
+  const expression =
+    '(async function(){' +
+    'for(var i=0;i<' + frames + ';i++){' +
+    'await new Promise(function(r){requestAnimationFrame(function(){r();});});' +
+    '}' +
+    'void document.body.offsetHeight;' +
+    'return true;' +
+    '})()';
+  await page.evaluate(expression);
+}
+
+/**
+ * 等字体与图片真正就绪。
+ *
+ * 为什么必须有这一步：873 用的是 font-display:block 的 webfont，且自己的 __MOTION_READY 在字体加载前就置位。
+ * 不等 fonts.ready 就截图，先渲染的帧会缺字或字形不同——同一帧在不同时间截会得到不同像素
+ * （实测：先渲 119 再渲 120，与先渲 0 再渲 120，120 的哈希不同）。
+ */
+export async function awaitAssets(page) {
+  const expression =
+    '(async function(){' +
+    'try{if(document.fonts&&document.fonts.ready)await document.fonts.ready;}catch(e){}' +
+    'await Promise.all(Array.prototype.map.call(document.images,function(img){' +
+    'if(img.complete)return null;' +
+    'return new Promise(function(r){img.addEventListener("load",r,{once:true});img.addEventListener("error",r,{once:true});});' +
+    '}).filter(Boolean));' +
+    'return {fontFaces:(document.fonts&&document.fonts.size)||0,images:document.images.length};' +
+    '})()';
+  return page.evaluate(expression);
+}
+
+/**
+ * 自适应 ready：顺序探测 4 种真实信号，再到 document.readyState 兜底。
+ * 返回 { signal, waitedMs, probe }。
+ */
+export async function waitForReady(page, options = {}) {
+  const timeout = options.timeout ?? 15000;
+  const interval = options.interval ?? 100;
+  const readyStateGrace = options.readyStateGrace ?? 2000;
+  const started = Date.now();
+  let probe = null;
+
+  while (Date.now() - started < timeout) {
+    probe = await page.evaluate(PROBE_EXPR, { awaitPromise: false });
+
+    if (probe.motion) return { signal: '__MOTION_READY', waitedMs: Date.now() - started, probe };
+    if (probe.promise) {
+      await page.evaluate('window.__readyPromise');
+      return { signal: '__readyPromise', waitedMs: Date.now() - started, probe };
+    }
+    if (probe.ready) {
+      await page.evaluate('window.ready');
+      return { signal: 'ready', waitedMs: Date.now() - started, probe };
+    }
+    if (probe.READY) return { signal: 'READY', waitedMs: Date.now() - started, probe };
+
+    const elapsed = Date.now() - started;
+    if (elapsed >= readyStateGrace && probe.state === 'complete') {
+      return { signal: 'document.readyState', waitedMs: elapsed, probe };
+    }
+    await sleep(interval);
+  }
+
+  throw new ReadyTimeoutError('等待页面 ready 超时（' + timeout + 'ms）', {
+    lastProbe: probe,
+    pageErrors: page.errors,
+  });
+}
