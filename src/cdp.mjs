@@ -14,6 +14,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /** 一次 evaluate 拿到所有候选状态，避免多次往返。 */
 const PROBE_EXPR =
   '(function(){return {' +
+  'mykit:window.__MYKIT_READY===true,' +
   'motion:window.__MOTION_READY===true,' +
   'promise:!!window.__readyPromise,' +
   'ready:!!(window.ready&&typeof window.ready.then==="function"),' +
@@ -271,6 +272,7 @@ export async function waitForReady(page, options = {}) {
   while (Date.now() - started < timeout) {
     probe = await page.evaluate(PROBE_EXPR, { awaitPromise: false });
 
+    if (probe.mykit) return { signal: '__MYKIT_READY', waitedMs: Date.now() - started, probe };
     if (probe.motion) return { signal: '__MOTION_READY', waitedMs: Date.now() - started, probe };
     if (probe.promise) {
       await page.evaluate('window.__readyPromise');

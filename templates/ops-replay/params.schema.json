@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["title", "subtitle"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "title": "主标题",
+      "description": "画面中央的大标题，2–12 字最有节奏。",
+      "minLength": 1,
+      "maxLength": 12,
+      "default": "绘图指令重放"
+    },
+    "subtitle": {
+      "type": "string",
+      "title": "副标题",
+      "description": "标题下方的一行说明，长度 1–40。",
+      "minLength": 1,
+      "maxLength": 40,
+      "default": "OPS REPLAY · 逐笔画出的向量动画"
+    },
+    "accent": {
+      "type": "string",
+      "title": "强调色",
+      "description": "强调块、描边与进度点的颜色。",
+      "pattern": "^#[0-9a-fA-F]{6}$",
+      "default": "#FF4A1C"
+    },
+    "ink": {
+      "type": "string",
+      "title": "文字色",
+      "pattern": "^#[0-9a-fA-F]{6}$",
+      "default": "#0B0C0E"
+    },
+    "paper": {
+      "type": "string",
+      "title": "底色",
+      "pattern": "^#[0-9a-fA-F]{6}$",
+      "default": "#F2EEE9"
+    }
+  }
+}

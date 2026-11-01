@@ -1,0 +1,27 @@
+{
+  "format": "mykit-template",
+  "specVersion": "0.1.0",
+  "template": {
+    "id": "ops-replay",
+    "version": "1.0.0",
+    "name": "绘图指令重放",
+    "license": "MIT"
+  },
+  "runtime": {
+    "profile": "html/canvas",
+    "entry": "src/index.html"
+  },
+  "output": {
+    "width": 1920,
+    "height": 1080,
+    "fps": { "num": 30, "den": 1 },
+    "duration": { "policy": "fixed", "seconds": 8, "maxSeconds": 60 }
+  },
+  "parameters": {
+    "schema": "params.schema.json",
+    "defaultPreset": "presets/demo.json"
+  },
+  "guide": "guide.json",
+  "permissions": { "network": false },
+  "integrity": "integrity.json"
+}

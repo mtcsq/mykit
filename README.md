@@ -32,9 +32,11 @@ node src/cli.mjs doctor    # 体检：node / 浏览器 / ffmpeg / 内置 WebSock
 - [x] Phase 2 单帧渲染（实测决定 canvas / dom，不看 profile 声明）
 - [x] Phase 3 串行编码（873：254 帧 / 1080p / 30fps / bt709）
 - [x] Phase 4 并发分片（canvas 靶子串行 vs 4 worker 画面 MD5 相同；短片刻意串行）
-- [ ] Phase 5 自有契约 + 静态检查
-- [ ] Phase 6 第一个自有模板 `ops-replay`
-- [ ] 音轨挂载 `--audio`
+- [x] Phase 5 自有契约 + 静态检查（`spec/mykit-template.md`、`verify`、`integrity`）
+- [x] Phase 6 第一个自有模板 `ops-replay`（240 帧 / 34.6 帧每秒 / 逐字节确定）
+- [x] 音轨挂载 `--audio`
+- [ ] ZIP 读取（`.motion` 单文件分发）
+- [ ] 公开发布（远程仓库 + 首次 release）
 
 ### 已知的坑（实测）
 

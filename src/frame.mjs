@@ -88,7 +88,17 @@ export function describeRuntime(motion) {
   const output = (motion && motion.output) || {};
   const fps = (output.fps && Number(output.fps.num)) || 30;
   const den = (output.fps && Number(output.fps.den)) || 1;
-  const frames = output.frames ?? (output.durationSeconds ? Math.round((output.durationSeconds * fps) / den) : null);
+
+  // 三种时长写法都要认：
+  //   mykit-template: output.duration = {policy:'fixed', seconds}
+  //   MotionGit 兼容:  output.durationSeconds + durationPolicy
+  //   显式帧数:        output.frames
+  const seconds =
+    (output.duration && typeof output.duration.seconds === 'number' && output.duration.seconds) ||
+    (typeof output.durationSeconds === 'number' && output.durationSeconds) ||
+    null;
+  const policy = (output.duration && output.duration.policy) || output.durationPolicy || (seconds ? 'fixed' : null);
+  const frames = output.frames ?? (seconds ? Math.round((seconds * fps) / den) : null);
   return {
     profile: runtime.profile || 'html-canvas/1',
     entry: runtime.entry || 'src/index.html',
@@ -98,6 +108,8 @@ export function describeRuntime(motion) {
     den,
     toSeconds: (f) => (f * den) / fps,
     frameCount: frames,
+    durationPolicy: policy,
+    maxSeconds: (output.duration && output.duration.maxSeconds) || null,
     preset: (motion && motion.parameters && motion.parameters.defaultPreset) || null,
   };
 }

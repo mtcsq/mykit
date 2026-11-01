@@ -1,0 +1,12 @@
+{
+  "algorithm": "sha256",
+  "files": {
+    "LICENSE": "108f1e2a6cbeab4ec2ff857ee103c55746fb57f9c2bde527c171be2dfa56fae3",
+    "README.md": "f0c29760aeba6361edfd5eaaf77a6ed42f46acb21e9b196715646090ace5ea37",
+    "guide.json": "b8afa367538de4786d3e37d4cc4c875c351910159aaa2edb0f35a637b285b3ce",
+    "motion.json": "a72e81d0f076edf11949401d7dcad11552b560445b29ffa34a2926cda63a081a",
+    "params.schema.json": "c93810608700d20cf1d183fc021fd17398241cc89ba6115f9af5e5c01f8cfe5f",
+    "presets/demo.json": "cbccf7f8937b4b0968bcbdeb6f5bd1509b5093bdaa18c8ce269e68e67f125399",
+    "src/index.html": "a872f307f484dd522708e746ea365d4b6678a4e5095ca8339bee23453dc52513"
+  }
+}

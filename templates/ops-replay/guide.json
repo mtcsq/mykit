@@ -1,0 +1,31 @@
+{
+  "fit": {
+    "summary": "8 秒竖版横向（1920×1080）动效片段：一条向量曲线被逐笔画出，圆环收束，标题以描边转填充的方式落位。",
+    "genres": ["technical", "showcase"],
+    "goodFor": ["技术概念开场", "产品原理示意", "需要'它在被画出来'观感的段落"],
+    "notFor": ["需要真人出镜", "需要 9:16 竖屏（本模板只验证横版）", "需要临场改变时长"],
+    "placement": "opening"
+  },
+  "duration": { "policy": "fixed", "min": 8, "max": 8, "default": 8 },
+  "materials": [
+    {
+      "role": "audio.music",
+      "required": false,
+      "use": "可选配乐；不提供则输出无声成片。",
+      "prepare": "任意授权音轨，8 秒以上。",
+      "ifMissing": "导出无声，画面不受影响。",
+      "ask": "要配乐吗？有的话给我一条 8 秒以上的音轨。"
+    }
+  ],
+  "copy": [
+    { "param": "title", "label": "主标题", "from": ["conversation"], "rule": "2–12 字最有节奏。" },
+    { "param": "subtitle", "label": "副标题", "from": ["conversation"], "rule": "一行说明，1–40 字。" }
+  ],
+  "conversation": [
+    "先说明这是 8 秒横版动效片段，画面是'一条曲线被画出来 + 标题落位'。",
+    "再收主标题与副标题；强调色默认橙红，可换。"
+  ],
+  "hostWithoutTools": [
+    "不能执行渲染时：交付 inputs.json 与源码，本机用 Node.js + Chromium + FFmpeg 按 30fps 逐帧渲染。"
+  ]
+}

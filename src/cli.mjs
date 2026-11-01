@@ -15,6 +15,9 @@ import { launch, waitForReady, awaitAssets, awaitSettle } from './cdp.mjs';
 import { pickPath, detectShape, capture, renderFrame, describeRuntime } from './frame.mjs';
 import { createEncoder, encodeSequence, probeMedia, summarize } from './encode.mjs';
 import { renderShards } from './pool.mjs';
+import { muxAudio, probeAudio } from './audio.mjs';
+import { verifyPackage, SPEC_VERSION, PROFILES, DURATION_POLICIES } from './verify.mjs';
+import { writeManifest, verifyManifest } from './integrity.mjs';
 
 const VERSION = '0.1.0';
 const MIN_NODE_MAJOR = 22;
@@ -26,7 +29,10 @@ const USAGE = [
   '  mykit doctor                                          体检环境',
   '  mykit probe  --root <dir> [--page <rel>]              打开页面，报告 ready 信号与 title',
   '  mykit still  --template <dir> --frame <N[,N2]> --out <file>   取静帧',
-  '  mykit render --template <dir> --out <file> [--frames <N>]     整片渲染',
+  '  mykit render --template <dir> --out <file> [--workers N]      整片渲染（可加 --audio <文件>）',
+  '  mykit verify --package <dir>                                  契约检查',
+  '  mykit integrity build|verify --package <dir>                 生成/校验 SHA-256 清单',
+  '  mykit spec                                                    打印契约版本与枚举',
   '',
   '选项：--page <rel> 指定页面（默认读 motion.json 的 runtime.entry）',
   '      --inputs <rel> 指定参数 JSON（默认读 parameters.defaultPreset）',
@@ -299,6 +305,7 @@ async function renderVideo(options) {
       const detected = await detectShape(page, shape);
       const started = Date.now();
       let fallbacks = 0;
+      let muxed = null;
       try {
         for (let frame = 0; frame < total; frame += 1) {
           await renderFrame(page, frame, inputs);
@@ -311,6 +318,7 @@ async function renderVideo(options) {
           }
         }
         await encoder.finish();
+        muxed = maybeMuxAudio(options, outFile);
       } catch (error) {
         encoder.kill();
         throw error;
@@ -346,6 +354,7 @@ async function renderVideo(options) {
         elapsedMs,
         framesPerSecond: Number((total / (elapsedMs / 1000)).toFixed(2)),
         fallbacks,
+        audio: muxed,
         media,
         ok: mismatches.length === 0,
         mismatches,
@@ -406,6 +415,7 @@ async function renderParallel(ctx) {
       crf: options.crf ? Number(options.crf) : 18,
     });
     const encodeMs = Date.now() - encodeStarted;
+    const muxed = maybeMuxAudio(options, outFile);
 
     const media = summarize(probeMedia(outFile));
     const mismatches = [];
@@ -432,6 +442,7 @@ async function renderParallel(ctx) {
       setupMs,
       renderMs,
       encodeMs,
+      audio: muxed,
       framesPerSecond: Number((total / (renderMs / 1000)).toFixed(2)),
       wallMs: Date.now() - started,
       media,
@@ -446,8 +457,45 @@ async function renderParallel(ctx) {
   }
 }
 
+function maybeMuxAudio(options, outFile) {
+  if (!options.audio) return null;
+  const audio = path.resolve(String(options.audio));
+  const info = probeAudio(audio);
+  const offset = Number(options['audio-offset'] || 0);
+  const gain = Number(options['audio-gain'] || 1);
+  const muxed = muxAudio({ video: outFile, audio, offset, gain });
+  return { input: audio, source: { codec: info.codec, duration: info.duration }, ...muxed };
+}
+
+function verifyCmd(options) {
+  const dir = options.package || options.template;
+  if (!dir) {
+    console.error('verify 需要 --package <目录>');
+    return 2;
+  }
+  const report = verifyPackage(dir);
+  console.log(JSON.stringify(report, null, 2));
+  return report.ok ? 0 : 1;
+}
+
+function integrityCmd(options, sub) {
+  const dir = options.package || options.template;
+  if (!dir) {
+    console.error('integrity 需要 --package <目录>');
+    return 2;
+  }
+  if (options.build || sub === 'build') {
+    const manifest = writeManifest(dir);
+    console.log(JSON.stringify({ built: true, files: Object.keys(manifest.files).length, package: path.resolve(String(dir)) }, null, 2));
+    return 0;
+  }
+  const report = verifyManifest(dir);
+  console.log(JSON.stringify({ package: path.resolve(String(dir)), ...report }, null, 2));
+  return report.ok ? 0 : 1;
+}
+
 async function main() {
-  const { command, options } = parseArgs(process.argv.slice(2));
+  const { command, positional, options } = parseArgs(process.argv.slice(2));
   switch (command) {
     case 'doctor':
       return doctor();
@@ -457,6 +505,13 @@ async function main() {
       return still(options);
     case 'render':
       return renderVideo(options);
+    case 'verify':
+      return verifyCmd(options);
+    case 'integrity':
+      return integrityCmd(options, positional[1]);
+    case 'spec':
+      console.log(JSON.stringify({ specVersion: SPEC_VERSION, profiles: PROFILES, durationPolicies: DURATION_POLICIES }, null, 2));
+      return 0;
     case undefined:
     case 'help':
     case '--help':

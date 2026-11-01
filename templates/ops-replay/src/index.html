@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8" />
+<title>ops-replay · 绘图指令重放</title>
+<style>
+  html, body { margin: 0; background: #000; }
+  canvas { display: block; }
+</style>
+<canvas id="stage" width="1920" height="1080"></canvas>
+<script>
+(function () {
+  'use strict';
+
+  /*
+   * 绘图指令重放（ops-replay）——mykit 第一个自有模板。
+   *
+   * 思路参考 869_volume-price-kline-charts 的 playOps / text_path 概念（文本转路径、随 fill/stroke 一起画），
+   * 代码为全新实现，不复制其源码。
+   *
+   * 确定性约定：只读 frame，不读墙钟；需要随机感时用值噪声 hash(n)。
+   */
+
+  var W = 1920;
+  var H = 1080;
+  var FPS = 30;
+  var DURATION = 8;
+
+  var DEFAULTS = {
+    title: '绘图指令重放',
+    subtitle: 'OPS REPLAY · 逐笔画出的向量动画',
+    accent: '#FF4A1C',
+    ink: '#0B0C0E',
+    paper: '#F2EEE9'
+  };
+
+  var P = assign({}, DEFAULTS);
+  var canvas = document.getElementById('stage');
+  var ctx = canvas.getContext('2d');
+
+  function assign(target) {
+    for (var i = 1; i < arguments.length; i++) {
+      var src = arguments[i];
+      if (!src) continue;
+      for (var k in src) if (Object.prototype.hasOwnProperty.call(src, k) && src[k] !== undefined) target[k] = src[k];
+    }
+    return target;
+  }
+
+  function clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
+  function pr(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function out(x) { return 1 - Math.pow(1 - x, 3); }
+  function expo(x) { return x >= 1 ? 1 : 1 - Math.pow(2, -10 * x); }
+
+  // 值噪声：同一 n 永远同一值（GLSL 经典 hash）
+  function hash(n) {
+    var s = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+    return s - Math.floor(s);
+  }
+
+  function applyInputs(inputs) {
+    if (!inputs) return;
+    if (typeof inputs.title === 'string' && inputs.title.length) P.title = inputs.title.slice(0, 12);
+    if (typeof inputs.subtitle === 'string' && inputs.subtitle.length) P.subtitle = inputs.subtitle.slice(0, 40);
+    ['accent', 'ink', 'paper'].forEach(function (key) {
+      if (typeof inputs[key] === 'string' && /^#[0-9a-fA-F]{6}$/.test(inputs[key])) P[key] = inputs[key];
+    });
+  }
+
+  // —— 几何：一条确定性折线 + 累计弧长（用于"逐笔画出"）——
+  var POINTS = (function () {
+    var pts = [];
+    var n = 28;
+    for (var i = 0; i <= n; i++) {
+      var x = 140 + (i * 1640) / n;
+      var y = 468 + Math.sin(i * 0.55) * 148 + (hash(i * 3.7) - 0.5) * 44;
+      pts.push([x, y]);
+    }
+    return pts;
+  })();
+
+  var CUM = (function () {
+    var acc = [0];
+    for (var i = 1; i < POINTS.length; i++) {
+      var dx = POINTS[i][0] - POINTS[i - 1][0];
+      var dy = POINTS[i][1] - POINTS[i - 1][1];
+      acc.push(acc[i - 1] + Math.sqrt(dx * dx + dy * dy));
+    }
+    return acc;
+  })();
+
+  var TOTAL_LEN = CUM[CUM.length - 1];
+
+  function cutAt(p) {
+    var target = TOTAL_LEN * clamp01(p);
+    var i = 1;
+    while (i < CUM.length - 1 && CUM[i] < target) i++;
+    var span = CUM[i] - CUM[i - 1] || 1;
+    var k = clamp01((target - CUM[i - 1]) / span);
+    return {
+      index: i,
+      point: [
+        POINTS[i - 1][0] + (POINTS[i][0] - POINTS[i - 1][0]) * k,
+        POINTS[i - 1][1] + (POINTS[i][1] - POINTS[i - 1][1]) * k
+      ]
+    };
+  }
+
+  function textWidth(text, font) {
+    ctx.font = font;
+    return ctx.measureText(text).width;
+  }
+
+  function drawGrid(t, p) {
+    ctx.save();
+    ctx.strokeStyle = P.ink;
+    ctx.globalAlpha = 0.07 * out(p);
+    ctx.lineWidth = 1;
+    for (var x = 0; x <= W; x += 120) {
+      ctx.beginPath();
+      ctx.moveTo(x + 0.5, 0);
+      ctx.lineTo(x + 0.5, H);
+      ctx.stroke();
+    }
+    for (var y = 0; y <= H; y += 120) {
+      ctx.beginPath();
+      ctx.moveTo(0, y + 0.5);
+      ctx.lineTo(W, y + 0.5);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawPath(p) {
+    if (p <= 0) return;
+    var cut = cutAt(p);
+    ctx.save();
+    ctx.strokeStyle = P.ink;
+    ctx.lineWidth = 7;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(POINTS[0][0], POINTS[0][1]);
+    for (var i = 1; i < cut.index; i++) ctx.lineTo(POINTS[i][0], POINTS[i][1]);
+    ctx.lineTo(cut.point[0], cut.point[1]);
+    ctx.stroke();
+    ctx.restore();
+
+    // 笔尖
+    ctx.save();
+    ctx.fillStyle = P.accent;
+    ctx.beginPath();
+    ctx.arc(cut.point[0], cut.point[1], 16, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawRing(p) {
+    if (p <= 0) return;
+    var cx = 1616;
+    var cy = 300;
+    var r = 92;
+    ctx.save();
+    ctx.strokeStyle = P.ink;
+    ctx.globalAlpha = 0.18;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.save();
+    ctx.strokeStyle = P.accent;
+    ctx.lineWidth = 10;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * clamp01(p));
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /**
+   * 文本按"路径"画：先描边再填充，填充比例随进度上升。
+   * 这就是 869 里 text_path 的作用——文字不是贴上去的，而是随着图形一起被"画"出来。
+   */
+  function drawTitle(t) {
+    var font = 'bold 128px "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif';
+    var chars = Array.prototype.slice.call(P.title);
+    var x = 140;
+    var y = 860;
+    for (var i = 0; i < chars.length; i++) {
+      var start = 3.1 + i * 0.06;
+      var p = pr(t, start, start + 0.55);
+      if (p <= 0) continue;
+      var e = expo(p);
+      var w = textWidth(chars[i], font);
+
+      ctx.save();
+      ctx.font = font;
+      ctx.lineJoin = 'round';
+      ctx.textBaseline = 'alphabetic';
+
+      // 描边：从有到无
+      ctx.globalAlpha = (1 - e) * 0.9;
+      ctx.strokeStyle = P.accent;
+      ctx.lineWidth = 3;
+      ctx.strokeText(chars[i], x, y);
+
+      // 填充：从无到有
+      ctx.globalAlpha = e;
+      ctx.fillStyle = P.ink;
+      ctx.fillText(chars[i], x, y);
+      ctx.restore();
+
+      x += w + 8;
+    }
+    return x;
+  }
+
+  function drawSubtitle(t) {
+    var p = pr(t, 4.6, 6.2);
+    if (p <= 0) return;
+    var font = '34px "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif';
+    var chars = Array.prototype.slice.call(P.subtitle);
+    var shown = Math.max(0, Math.floor(chars.length * out(p)));
+    ctx.save();
+    ctx.font = font;
+    ctx.fillStyle = P.ink;
+    ctx.globalAlpha = 0.72;
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(chars.slice(0, shown).join(''), 144, 930);
+    ctx.restore();
+  }
+
+  function drawLabel(t) {
+    var p = pr(t, 0, 0.6);
+    ctx.save();
+    ctx.font = '26px "JetBrains Mono", "Consolas", monospace';
+    ctx.fillStyle = P.ink;
+    ctx.globalAlpha = 0.55 * out(p);
+    ctx.fillText('OPS / REPLAY', 144, 148);
+    ctx.textAlign = 'right';
+    ctx.fillText('1920 × 1080 · 30 FPS', W - 144, 148);
+    ctx.restore();
+  }
+
+  function drawAccentBar(t) {
+    var p = pr(t, 4.2, 5.4);
+    if (p <= 0) return;
+    ctx.save();
+    ctx.fillStyle = P.accent;
+    ctx.fillRect(140, 950, 260 * out(p), 6);
+    ctx.restore();
+  }
+
+  function draw(t) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = P.paper;
+    ctx.fillRect(0, 0, W, H);
+
+    drawGrid(t, pr(t, 0, 1.2));
+    drawLabel(t);
+    drawPath(pr(t, 0.45, 3.6));
+    drawRing(pr(t, 2.9, 4.4));
+    drawTitle(t);
+    drawAccentBar(t);
+    drawSubtitle(t);
+  }
+
+  window.renderFrame = function (frame, inputs) {
+    if (inputs) applyInputs(inputs);
+    var t = Math.max(0, Math.min(DURATION - 1 / FPS, Number(frame) / FPS));
+    draw(t);
+  };
+
+  window.seek = function (seconds, inputs) {
+    if (inputs) applyInputs(inputs);
+    draw(Math.max(0, Math.min(DURATION, Number(seconds))));
+  };
+
+  window.__MYKIT_TEMPLATE = { id: 'ops-replay', fps: FPS, duration: DURATION, frames: Math.round(DURATION * FPS) };
+
+  // 字体就绪后再置位：否则首帧会缺字（这是 873 踩过的坑）
+  var done = function () { window.__MYKIT_READY = true; window.__MOTION_READY = true; };
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(done, done);
+  else done();
+})();
+</script>
+</html>
