@@ -57,7 +57,7 @@
 | 产出 | 在 `{out}` 目录写 `fNNNNN.jpg` 或 `fNNNNN.png`（5 位补零），覆盖 `[start, end)` |
 | 约定 | 退出码 0 = 成功；缺帧会被内核判失败并列出缺哪几帧 |
 | 工作目录 | 内核把 cwd 设为包目录，适配器可以用相对路径引用自己的脚本 |
-| 确定性 | 适配器自己保证；内核用 `test/determinism.mjs` 验（实测示例包 byteExact=true） |
+| 确定性 | 适配器自己保证；内核用 `mykit conformance` 验（同一帧跑两次独立进程比字节，实测两套示例均为 true，1.5 s） |
 
 为什么这样设计：原生态的 `native-python-node/1`（3 个包）和 `remotion-project/1`（1 个包）如果逐个写死支持，
 内核就要依赖 Python、懂 Remotion 的打包，违反零依赖。改成协议后，任何工具链都能接，内核一行不改。

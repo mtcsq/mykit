@@ -20,6 +20,7 @@ import { verifyPackage, SPEC_VERSION, PROFILES, DURATION_POLICIES } from './veri
 import { writeManifest, verifyManifest } from './integrity.mjs';
 import { writeZip, collectDirectory, unpackZip, contentHash } from './zip.mjs';
 import { checkStatelessness } from './conformance.mjs';
+import { checkAdapterDeterminism } from './conformance-adapter.mjs';
 import { runAdapter, adapterCommand } from './adapter.mjs';
 
 const VERSION = '0.1.0';
@@ -739,6 +740,29 @@ async function conformanceCmd(options) {
         .map((s) => Number(s.trim()))
         .filter((n) => Number.isFinite(n) && n >= 0 && n <= limit)
     : [0, Math.floor(limit * 0.25), Math.floor(limit * 0.5), Math.floor(limit * 0.75), limit];
+
+  if (runtime.profile === 'external/adapter') {
+    const adapterReport = await checkAdapterDeterminism({
+      runtime,
+      templateDir,
+      inputs,
+      samples,
+      workDir: path.join(process.cwd(), '.tmp'),
+    });
+    console.log(
+      JSON.stringify(
+        {
+          template: templateDir,
+          packageSource: resolved.source,
+          declaredStateless: Boolean(motion.runtime && motion.runtime.stateless),
+          ...adapterReport,
+        },
+        null,
+        2,
+      ),
+    );
+    return adapterReport.stateless ? 0 : 1;
+  }
 
   const chrome = findBrowser();
   if (!chrome.available) {
