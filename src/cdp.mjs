@@ -255,14 +255,20 @@ export async function launch(options = {}) {
         return { state: 'timeout', waitedMs: Date.now() - started };
       },
       async close() {
+        // 顺序很重要：任何一步抛错都不能跳过后面的清理，否则主浏览器进程会留成孤儿
         try {
           await send('Browser.close', {}, 5000);
         } catch {
-          /* 忽略：下面 kill 兜底 */
+          /* 忽略：下面杀树兜底 */
         }
-        socket.close();
+        try {
+          socket.close();
+        } catch {
+          /* 忽略 */
+        }
         killTree(child);
-        await sleep(100);
+        await sleep(120);
+        killTree(child); // 二次兜底：Chrome 退出前可能又派生了子进程
       },
     };
 
