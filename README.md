@@ -24,6 +24,7 @@
 ```bash
 node src/cli.mjs doctor                                  # 体检：node / 浏览器 / ffmpeg / 内置 WebSocket
 node src/cli.mjs verify --package templates/ops-replay    # 契约检查
+node src/cli.mjs conformance --template templates/ops-replay  # 无状态性检查（并发前提）
 node src/cli.mjs still  --template templates/ops-replay --frame 120 --out f120.jpg
 node src/cli.mjs render --template templates/ops-replay --out out.mp4
 node src/cli.mjs render --template templates/ops-replay --out out.mp4 --audio bgm.mp3
@@ -58,6 +59,8 @@ node src/cli.mjs render --package ops-replay.mykit --out out.mp4   # 直接从�
 - **确定性分级**：canvas 路径逐字节一致；dom 路径换顺序跑有 PSNR ≈ 52 dB 微差，只能按容差判定
 - **必须等字体**：`font-display:block` 的模板不等 `document.fonts.ready` 会缺字
 - **并发有启动成本**：每 worker ≈ 5–6 秒，帧数 < 400 用串行更快
+- **并发还有前置条件**：模板必须声明 `runtime.stateless: true` 并过 `mykit conformance`；否则内核强制串行
+- **"字节一致"不是承诺**：字形缓存造成 55–60 dB 抖动；真实状态依赖会掉到 26–39 dB
 
 ## 许可
 

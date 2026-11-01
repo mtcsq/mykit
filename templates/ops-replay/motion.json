@@ -9,19 +9,29 @@
   },
   "runtime": {
     "profile": "html/canvas",
-    "entry": "src/index.html"
+    "entry": "src/index.html",
+    "stateless": true
   },
   "output": {
     "width": 1920,
     "height": 1080,
-    "fps": { "num": 30, "den": 1 },
-    "duration": { "policy": "fixed", "seconds": 8, "maxSeconds": 60 }
+    "fps": {
+      "num": 30,
+      "den": 1
+    },
+    "duration": {
+      "policy": "fixed",
+      "seconds": 8,
+      "maxSeconds": 60
+    }
   },
   "parameters": {
     "schema": "params.schema.json",
     "defaultPreset": "presets/demo.json"
   },
   "guide": "guide.json",
-  "permissions": { "network": false },
+  "permissions": {
+    "network": false
+  },
   "integrity": "integrity.json"
 }

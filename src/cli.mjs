@@ -12,13 +12,14 @@ import { spawnSync } from 'node:child_process';
 import { findBrowser, findAllBrowsers } from './browser.mjs';
 import { serve } from './serve.mjs';
 import { launch, waitForReady, awaitAssets, awaitSettle } from './cdp.mjs';
-import { pickPath, detectShape, capture, renderFrame, describeRuntime } from './frame.mjs';
+import { pickPath, detectShape, capture, renderFrame, describeRuntime, planFrames } from './frame.mjs';
 import { createEncoder, encodeSequence, probeMedia, summarize } from './encode.mjs';
 import { renderShards } from './pool.mjs';
 import { muxAudio, probeAudio } from './audio.mjs';
 import { verifyPackage, SPEC_VERSION, PROFILES, DURATION_POLICIES } from './verify.mjs';
 import { writeManifest, verifyManifest } from './integrity.mjs';
 import { writeZip, collectDirectory, unpackZip, contentHash } from './zip.mjs';
+import { checkStatelessness } from './conformance.mjs';
 
 const VERSION = '0.1.0';
 const MIN_NODE_MAJOR = 22;
@@ -33,6 +34,7 @@ const USAGE = [
   '  mykit render --template <dir> --out <file> [--workers N]      整片渲染（可加 --audio <文件>）',
   '  mykit pack   --package <dir> --out <file.zip>                打成单文件（可复现）',
   '  mykit unpack --package <file.zip> --out <dir>                解包（带边界校验）',
+  '  mykit conformance --template <dir|zip> [--span 600]          无状态性检查（并发前提）',
   '  mykit verify --package <dir|zip>                             契约检查',
   '  mykit integrity build|verify --package <dir>                 生成/校验 SHA-256 清单',
   '  mykit spec                                                    打印契约版本与枚举',
@@ -261,9 +263,27 @@ async function renderVideo(options) {
   const motion = readJson(motionFile);
   const runtime = describeRuntime(motion);
   const shape = pickPath(runtime.profile);
-  const total = Number(options.frames || runtime.frameCount || 0);
+
+  // 动态时长：fit-voiceover 需要先量音频，才能算帧数（契约里声明了就必须真能做到）
+  let audioSeconds = null;
+  if (options.audio) {
+    const audioPath = path.resolve(String(options.audio));
+    if (!fs.existsSync(audioPath)) {
+      console.error('音频不存在：' + audioPath);
+      return 2;
+    }
+    audioSeconds = probeAudio(audioPath).duration;
+  }
+  const plan = planFrames(runtime, { audioSeconds, audioOffset: Number(options['audio-offset'] || 0) });
+  const total = Number(options.frames || plan.frames || 0);
   if (!total) {
-    console.error('无法确定帧数：motion.json 既没有 output.frames 也没有 durationSeconds');
+    if (runtime.durationPolicy === 'fit-voiceover') {
+      console.error('本模板时长策略是 fit-voiceover：必须给 --audio（或 --frames）才能确定帧数');
+    } else if (runtime.durationPolicy === 'fit-content') {
+      console.error('本模板时长策略是 fit-content：本版还不支持，请用 --frames 显式指定');
+    } else {
+      console.error('无法确定帧数：motion.json 既没有 output.frames 也没有 duration.seconds');
+    }
     return 2;
   }
   const outFile = path.resolve(String(options.out));
@@ -274,7 +294,13 @@ async function renderVideo(options) {
   // 120 帧时串行 7 秒、并发墙钟 27 秒；断点约在 400–500 帧。短片一律走串行。
   const cores = os.cpus().length;
   const autoWorkers = total >= 400 ? Math.max(1, Math.min(8, Math.floor(cores / 4))) : 1;
-  const workers = Number(options.workers || autoWorkers);
+  let workers = Number(options.workers || autoWorkers);
+  let workersFallback = null;
+  if (workers > 1 && !(motion.runtime && motion.runtime.stateless === true)) {
+    workersFallback = '模板未声明 runtime.stateless，已强制串行（用 mykit conformance 验证后再打开）';
+    process.stderr.write('[mykit] ' + workersFallback + '\n');
+    workers = 1;
+  }
 
   if (workers > 1) {
     return renderParallel({
@@ -289,6 +315,7 @@ async function renderVideo(options) {
       quality,
       workers,
       options,
+      workersFallback,
     });
   }
 
@@ -358,6 +385,7 @@ async function renderVideo(options) {
         frames: total,
         elapsedMs,
         framesPerSecond: Number((total / (elapsedMs / 1000)).toFixed(2)),
+        framePlan: { ...plan, frames: total },
         fallbacks,
         audio: muxed,
         media,
@@ -374,7 +402,7 @@ async function renderVideo(options) {
 }
 
 async function renderParallel(ctx) {
-  const { templateDir, motion, runtime, shape, total, outFile, inputs, source, quality, workers, options } = ctx;
+  const { templateDir, motion, runtime, shape, total, outFile, inputs, source, quality, workers, options, workersFallback } = ctx;
   const chrome = findBrowser();
   if (!chrome.available) {
     console.error('找不到浏览器，请设置 CHROME_PATH');
@@ -441,6 +469,7 @@ async function renderParallel(ctx) {
       out: outFile,
       frames: total,
       workers,
+      workersFallback,
       workersInfo: shards.workersInfo,
       skipped: shards.skipped,
       framesDir,
@@ -559,6 +588,67 @@ function unpackCmd(options) {
   return 0;
 }
 
+async function conformanceCmd(options) {
+  const resolved = resolvePackage(options.template || options.package);
+  const templateDir = resolved.dir;
+  const motion = readJson(path.join(templateDir, 'motion.json'));
+  const runtime = describeRuntime(motion);
+  const shape = pickPath(runtime.profile);
+  const { inputs } = resolveInputs(templateDir, options, runtime);
+  const total = Number(options.frames || runtime.frameCount || 0);
+  if (!total) {
+    console.error('conformance 需要能确定帧数（motion.json 的 duration.seconds 或 --frames）');
+    return 2;
+  }
+
+  // 连续段上限：检查要跑 0..maxSample，5055 帧的片子会白跑五分钟，默认只查前 600 帧
+  const span = Number(options.span || 600);
+  const limit = Math.min(total - 1, span);
+  const samples = options.samples
+    ? String(options.samples)
+        .split(',')
+        .map((s) => Number(s.trim()))
+        .filter((n) => Number.isFinite(n) && n >= 0 && n <= limit)
+    : [0, Math.floor(limit * 0.25), Math.floor(limit * 0.5), Math.floor(limit * 0.75), limit];
+
+  const chrome = findBrowser();
+  if (!chrome.available) {
+    console.error('找不到浏览器，请设置 CHROME_PATH');
+    return 2;
+  }
+  const server = await serve(templateDir);
+  try {
+    const report = await checkStatelessness({
+      executable: chrome.executable,
+      origin: server.origin,
+      pagePath: String(options.page || runtime.entry),
+      width: runtime.width,
+      height: runtime.height,
+      shape,
+      inputs,
+      quality: Number(options.quality || 0.93),
+      workDir: path.join(process.cwd(), '.tmp'),
+      minPsnr: options['min-psnr'] ? Number(options['min-psnr']) : 45,
+      samples,
+    });
+    console.log(
+      JSON.stringify(
+        {
+          template: templateDir,
+          packageSource: resolved.source,
+          declaredStateless: Boolean(motion.runtime && motion.runtime.stateless),
+          ...report,
+        },
+        null,
+        2,
+      ),
+    );
+    return report.stateless ? 0 : 1;
+  } finally {
+    await server.close();
+  }
+}
+
 async function main() {
   const { command, positional, options } = parseArgs(process.argv.slice(2));
   switch (command) {
@@ -574,6 +664,8 @@ async function main() {
       return verifyCmd(options);
     case 'integrity':
       return integrityCmd(options, positional[1]);
+    case 'conformance':
+      return conformanceCmd(options);
     case 'pack':
       return packCmd(options);
     case 'unpack':

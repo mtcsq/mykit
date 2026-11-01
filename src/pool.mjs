@@ -2,11 +2,13 @@
  * 并发分片渲染。
  *
  * 结论来自 895 的实测：一个浏览器里的多个页面共用 GPU 进程，WebGL 会排队，
- * 所以必须「一个 worker 一个浏览器进程」；帧分配用轮转（j = w; j += workers），比连续区间更均衡。
- * 帧落盘后由 ffmpeg 从序列编码，天然支持断点续跑。
+ * 所以必须「一个 worker 一个浏览器进程」。
  *
- * 计时分两段：setupMs（启动 + 导航 + 等字体图片）与 renderMs（纯出帧）。混在一起会把
- * 启动开销算进渲染速度——第一次实测就是这么被误导的。
+ * 调度用共享任务队列（work stealing）而不是静态轮转：帧成本不均（入场动画、特效层）
+ * 时静态切分会让某个 worker 提前空转。单线程事件循环里 cursor 自增天然安全。
+ *
+ * 帧落盘后由 ffmpeg 从序列编码，天然支持断点续跑。
+ * 计时分两段：setupMs（启动 + 导航 + 等字体图片）与 renderMs（纯出帧）。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -43,15 +45,16 @@ export async function renderShards(options) {
     else todo.push(frame);
   }
 
-  const empty = { frames: total, workersInfo: [], skipped, setupMs: 0, renderMs: 0 };
-  if (!todo.length) return empty;
+  if (!todo.length) return { frames: total, workersInfo: [], skipped, setupMs: 0, renderMs: 0 };
 
   const pageCount = Math.min(workers, todo.length);
   const setupStarted = Date.now();
   const pages = [];
   const workersInfo = [];
 
-  for (let i = 0; i < pageCount; i += 1) pages.push(await launch({ executable, width, height }));
+  for (let i = 0; i < pageCount; i += 1) {
+    pages.push(await launch({ executable, width, height }));
+  }
 
   try {
     await Promise.all(
@@ -60,19 +63,21 @@ export async function renderShards(options) {
         const ready = await waitForReady(page);
         await awaitAssets(page);
         const detected = await detectShape(page, declaredShape);
-        workersInfo.push({ worker: w, ready: ready.signal, shape: detected.shape, reason: detected.reason });
         page.__shape = detected.shape;
+        workersInfo.push({ worker: w, ready: ready.signal, shape: detected.shape, reason: detected.reason });
       }),
     );
 
     const setupMs = Date.now() - setupStarted;
     const renderStarted = Date.now();
     let done = 0;
+    let cursor = 0;
+
+    const nextJob = () => (cursor < todo.length ? todo[cursor++] : null);
 
     await Promise.all(
-      pages.map(async (page, w) => {
-        for (let j = w; j < todo.length; j += pages.length) {
-          const frame = todo[j];
+      pages.map(async (page) => {
+        for (let frame = nextJob(); frame !== null; frame = nextJob()) {
           await renderFrame(page, frame, inputs);
           if (page.__shape === 'dom') await awaitSettle(page);
           const shot = await capture(page, { path: page.__shape, quality });

@@ -76,6 +76,9 @@ export function verifyPackage(packageDir) {
   const runtime = motion.runtime || {};
   if (!PROFILES.includes(runtime.profile)) errors.push('runtime.profile 必须是 ' + PROFILES.join(' / ') + '，实际 ' + JSON.stringify(runtime.profile));
   checkInside(dir, runtime.entry, errors, 'runtime.entry');
+  if (runtime.stateless !== undefined && typeof runtime.stateless !== 'boolean') {
+    errors.push('runtime.stateless 若出现必须是布尔值（声明后可并发，需先过 mykit conformance）');
+  }
 
   // —— 输出规格 ——
   const output = motion.output || {};

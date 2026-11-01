@@ -37,6 +37,9 @@ function canvasDataUrlExpr(quality) {
     'var list=document.querySelectorAll("canvas");var best=null,bestArea=0;' +
     'for(var i=0;i<list.length;i++){var c=list[i];var a=(c.width||0)*(c.height||0);if(a>bestArea){bestArea=a;best=c;}}' +
     'if(!best||!bestArea)return null;' +
+    // 强制一次读回，确保 2D 绘制指令已经真正光栅化。并发负载下不加这一步，
+    // toDataURL 可能拿到尚未完成的画面（实测 4 worker 渲染 892 时 133 帧之后开始分叉）。
+    'try{best.getContext("2d").getImageData(0,0,1,1);}catch(e){}' +
     'return best.toDataURL("image/jpeg",' + Number(quality) + ');' +
     '})()'
   );
@@ -74,6 +77,35 @@ export async function capture(page, options = {}) {
     fallback: path === 'canvas',
     note: notes.join('; ') || undefined,
   };
+}
+
+
+/**
+ * 帧数规划：把契约里的三种时长策略真正算出来。
+ *
+ *  - fixed            → 由 seconds 算，与音频无关
+ *  - fit-voiceover    → 由配音时长算，受 maxSeconds 夹紧（音频比上限长就截断）
+ *  - fit-content      → 目前没有内容长度来源，交回调用方（拿不到就报错，不瞎猜）
+ *
+ * 返回 frames=null 表示"缺信息"，由调用方决定报什么错——绝不默认猜一个数字。
+ */
+export function planFrames(runtime, options = {}) {
+  const fps = runtime.fps || 30;
+  const den = runtime.den || 1;
+  const max = runtime.maxSeconds || null;
+
+  if (runtime.frameCount) {
+    return { frames: runtime.frameCount, basis: 'declared', seconds: (runtime.frameCount * den) / fps };
+  }
+
+  if (runtime.durationPolicy === 'fit-voiceover' && typeof options.audioSeconds === 'number') {
+    const usable = Math.max(0, options.audioSeconds - (options.audioOffset || 0));
+    const seconds = max ? Math.min(usable, max) : usable;
+    const frames = Math.max(1, Math.round((seconds * fps) / den));
+    return { frames, basis: 'audio', seconds, clamped: max ? usable > max : false };
+  }
+
+  return { frames: null, basis: 'unknown', seconds: null };
 }
 
 /** 调 window.renderFrame(frame, inputs)；inputs 会被 JSON 序列化后注入。 */
