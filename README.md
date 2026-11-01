@@ -35,8 +35,8 @@ node src/cli.mjs doctor    # 体检：node / 浏览器 / ffmpeg / 内置 WebSock
 - [x] Phase 5 自有契约 + 静态检查（`spec/mykit-template.md`、`verify`、`integrity`）
 - [x] Phase 6 第一个自有模板 `ops-replay`（240 帧 / 34.6 帧每秒 / 逐字节确定）
 - [x] 音轨挂载 `--audio`
-- [x] 推送到私有仓库 `mtcsq/mykit`（默认分支 main，4 个提交）
-- [ ] ZIP 读取（`.motion` 单文件分发）
+- [x] ZIP 单文件分发（`pack` / `unpack` / 直接从 zip 渲染，带 4 项边界校验）
+- [x] 推送到私有仓库 `mtcsq/mykit`（main 分支）
 - [ ] 转为公开仓库（等你确认后再动）
 
 ### 已知的坑（实测）

@@ -18,6 +18,7 @@ import { renderShards } from './pool.mjs';
 import { muxAudio, probeAudio } from './audio.mjs';
 import { verifyPackage, SPEC_VERSION, PROFILES, DURATION_POLICIES } from './verify.mjs';
 import { writeManifest, verifyManifest } from './integrity.mjs';
+import { writeZip, collectDirectory, unpackZip, contentHash } from './zip.mjs';
 
 const VERSION = '0.1.0';
 const MIN_NODE_MAJOR = 22;
@@ -30,7 +31,9 @@ const USAGE = [
   '  mykit probe  --root <dir> [--page <rel>]              打开页面，报告 ready 信号与 title',
   '  mykit still  --template <dir> --frame <N[,N2]> --out <file>   取静帧',
   '  mykit render --template <dir> --out <file> [--workers N]      整片渲染（可加 --audio <文件>）',
-  '  mykit verify --package <dir>                                  契约检查',
+  '  mykit pack   --package <dir> --out <file.zip>                打成单文件（可复现）',
+  '  mykit unpack --package <file.zip> --out <dir>                解包（带边界校验）',
+  '  mykit verify --package <dir|zip>                             契约检查',
   '  mykit integrity build|verify --package <dir>                 生成/校验 SHA-256 清单',
   '  mykit spec                                                    打印契约版本与枚举',
   '',
@@ -173,11 +176,12 @@ function resolveInputs(templateDir, options, runtime) {
 }
 
 async function still(options) {
-  if (!options.template || options.frame === undefined || !options.out) {
-    console.error('still 需要 --template <dir> --frame <N> --out <file>');
+  if (!(options.template || options.package) || options.frame === undefined || !options.out) {
+    console.error('still 需要 --template <dir|zip> --frame <N> --out <file>');
     return 2;
   }
-  const templateDir = path.resolve(String(options.template));
+  const resolved = resolvePackage(options.template || options.package);
+  const templateDir = resolved.dir;
   const motionFile = path.join(templateDir, 'motion.json');
   if (!fs.existsSync(motionFile)) {
     console.error('找不到 motion.json：' + motionFile);
@@ -242,11 +246,12 @@ async function still(options) {
 }
 
 async function renderVideo(options) {
-  if (!options.template || !options.out) {
-    console.error('render 需要 --template <dir> --out <file>');
+  if (!(options.template || options.package) || !options.out) {
+    console.error('render 需要 --template <dir|zip> --out <file>');
     return 2;
   }
-  const templateDir = path.resolve(String(options.template));
+  const resolved = resolvePackage(options.template || options.package);
+  const templateDir = resolved.dir;
   const motionFile = path.join(templateDir, 'motion.json');
   if (!fs.existsSync(motionFile)) {
     console.error('找不到 motion.json：' + motionFile);
@@ -473,8 +478,9 @@ function verifyCmd(options) {
     console.error('verify 需要 --package <目录>');
     return 2;
   }
-  const report = verifyPackage(dir);
-  console.log(JSON.stringify(report, null, 2));
+  const target = resolvePackage(dir);
+  const report = verifyPackage(target.dir);
+  console.log(JSON.stringify({ packageSource: target.source, packageHash: target.hash || null, ...report }, null, 2));
   return report.ok ? 0 : 1;
 }
 
@@ -494,6 +500,65 @@ function integrityCmd(options, sub) {
   return report.ok ? 0 : 1;
 }
 
+/**
+ * 统一入口：目录或 .motion/.zip 都接受。ZIP 按内容哈希解到 .tmp/packages/<hash>，
+ * 同一个包第二次用直接复用解包结果。
+ */
+function resolvePackage(input) {
+  const abs = path.resolve(String(input));
+  if (!fs.existsSync(abs)) throw new Error('包不存在：' + abs);
+  const stat = fs.statSync(abs);
+  if (stat.isDirectory()) return { dir: abs, source: 'directory', bytes: null };
+  const buffer = fs.readFileSync(abs);
+  const hash = contentHash(buffer);
+  const dest = path.join(process.cwd(), '.tmp', 'packages', hash);
+  if (!fs.existsSync(path.join(dest, 'motion.json'))) {
+    const info = unpackZip(buffer, dest);
+    return { dir: dest, source: 'zip', hash, bytes: buffer.length, entries: info.entries, unpackedBytes: info.totalBytes };
+  }
+  return { dir: dest, source: 'zip', hash, bytes: buffer.length, cached: true };
+}
+
+function packCmd(options) {
+  const dir = options.package || options.template;
+  const out = options.out;
+  if (!dir || !out) {
+    console.error('pack 需要 --package <目录> --out <文件.zip>');
+    return 2;
+  }
+  const entries = collectDirectory(dir);
+  const buffer = writeZip(entries);
+  fs.mkdirSync(path.dirname(path.resolve(String(out))), { recursive: true });
+  fs.writeFileSync(path.resolve(String(out)), buffer);
+  console.log(
+    JSON.stringify(
+      {
+        out: path.resolve(String(out)),
+        entries: entries.length,
+        sourceBytes: entries.reduce((n, e) => n + e.data.length, 0),
+        packageBytes: buffer.length,
+        sha256: sha256(buffer),
+      },
+      null,
+      2,
+    ),
+  );
+  return 0;
+}
+
+function unpackCmd(options) {
+  const file = options.package || options.zip;
+  const out = options.out;
+  if (!file || !out) {
+    console.error('unpack 需要 --package <文件.zip> --out <目录>');
+    return 2;
+  }
+  const buffer = fs.readFileSync(path.resolve(String(file)));
+  const info = unpackZip(buffer, out);
+  console.log(JSON.stringify({ dir: info.dir, entries: info.entries, totalBytes: info.totalBytes }, null, 2));
+  return 0;
+}
+
 async function main() {
   const { command, positional, options } = parseArgs(process.argv.slice(2));
   switch (command) {
@@ -509,6 +574,10 @@ async function main() {
       return verifyCmd(options);
     case 'integrity':
       return integrityCmd(options, positional[1]);
+    case 'pack':
+      return packCmd(options);
+    case 'unpack':
+      return unpackCmd(options);
     case 'spec':
       console.log(JSON.stringify({ specVersion: SPEC_VERSION, profiles: PROFILES, durationPolicies: DURATION_POLICIES }, null, 2));
       return 0;
