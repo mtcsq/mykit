@@ -78,6 +78,7 @@ CI 见 ```.github/workflows/test.yml```：单元 job 零安装即可跑；集成
 - **profile 声明不可信**：873 写 `html-canvas/1`，页面 canvas 数为 0，必须实测探测
 - **确定性分级**：canvas 路径逐字节一致；dom 路径换顺序跑有 PSNR ≈ 52 dB 微差，只能按容差判定
 - **必须等字体**：`font-display:block` 的模板不等 `document.fonts.ready` 会缺字
+- **浏览器子进程会残留**：`child.kill()` 只杀父进程，renderer/gpu 子进程会留下（实测残留 6 个 headless，后续测试慢近 3 倍）。现在统一走杀进程树（Win: `taskkill /T`；POSIX: 进程组 kill），并在进程退出时兜底清理；清理后 `test:int` 从 72 s 回到 39 s，跑完残留 0。
 - **并发有启动成本**：每 worker ≈ 5–6 秒，帧数 < 400 用串行更快
 - **并发还有前置条件**：模板必须声明 `runtime.stateless: true` 并过 `mykit conformance`；否则内核强制串行
 - **"字节一致"不是承诺**：字形缓存造成 55–60 dB 抖动；真实状态依赖会掉到 26–39 dB

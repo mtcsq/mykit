@@ -7,9 +7,55 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// 浏览器会派生一堆子进程（renderer/gpu/utility），child.kill() 只杀父进程，
+// 子进程会留下来占 CPU 与内存——实测残留过 6 个 headless 进程，还把后续测试拖慢 3 倍。
+// 因此统一走"杀进程树"，并登记活跃进程，进程退出时兜底清理。
+const ACTIVE = new Set();
+
+function killTree(child) {
+  if (!child || child.exitCode !== null || child.killed) return;
+  try {
+    if (process.platform === 'win32') {
+      spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+    } else {
+      process.kill(-child.pid, 'SIGKILL');
+    }
+  } catch {
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      /* 已经没了 */
+    }
+  }
+}
+
+function registerChild(child) {
+  ACTIVE.add(child);
+  child.once('exit', () => ACTIVE.delete(child));
+}
+
+let exitHooked = false;
+function hookExit() {
+  if (exitHooked) return;
+  exitHooked = true;
+  const cleanup = () => {
+    for (const child of ACTIVE) killTree(child);
+  };
+  process.once('exit', cleanup);
+  process.once('SIGINT', () => {
+    cleanup();
+    process.exit(130);
+  });
+  process.once('SIGTERM', () => {
+    cleanup();
+    process.exit(143);
+  });
+}
+
 
 /** 一次 evaluate 拿到所有候选状态，避免多次往返。 */
 const PROBE_EXPR =
@@ -89,7 +135,13 @@ export async function launch(options = {}) {
     'about:blank',
   ];
 
-  const child = spawn(executable, args, { windowsHide: true, stdio: 'ignore' });
+  hookExit();
+  const child = spawn(executable, args, {
+    windowsHide: true,
+    stdio: 'ignore',
+    detached: process.platform !== 'win32', // 独立进程组，便于整组结束
+  });
+  registerChild(child);
   const startupTimeout = options.startupTimeout ?? 25000;
 
   let socket;
@@ -209,7 +261,7 @@ export async function launch(options = {}) {
           /* 忽略：下面 kill 兜底 */
         }
         socket.close();
-        if (child.exitCode === null) child.kill();
+        killTree(child);
         await sleep(100);
       },
     };
@@ -217,7 +269,7 @@ export async function launch(options = {}) {
     return page;
   } catch (error) {
     if (socket) socket.close();
-    if (child.exitCode === null) child.kill();
+    killTree(child);
     throw error;
   }
 }
