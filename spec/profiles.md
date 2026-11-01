@@ -62,4 +62,9 @@
 为什么这样设计：原生态的 `native-python-node/1`（3 个包）和 `remotion-project/1`（1 个包）如果逐个写死支持，
 内核就要依赖 Python、懂 Remotion 的打包，违反零依赖。改成协议后，任何工具链都能接，内核一行不改。
 
-参考实现：`templates/external-demo/adapter.py`（纯标准库写 PNG，48 帧 640×360，两次渲染 MD5 相同）。
+参考实现（两套，工具链完全不同）：
+
+- `templates/external-demo/adapter.py` —— Python 标准库手写 PNG，48 帧 640×360，确定性 byteExact=true
+- `templates/ffmpeg-demo/adapter.mjs` —— FFmpeg 滤镜图出图，48 帧；**分片渲染 + 拼装与整跑 MD5 完全相同**
+
+Remotion 类工程的接法见 `docs/adapter-remotion.md`（未验证，需 npm 依赖）。

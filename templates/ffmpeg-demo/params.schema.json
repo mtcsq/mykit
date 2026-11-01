@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["accent"],
+  "properties": {
+    "accent": { "type": "string", "title": "强调色", "pattern": "^#[0-9a-fA-F]{6}$", "default": "#FF4A1C" },
+    "speed": { "type": "number", "title": "速度", "minimum": 1, "maximum": 12, "default": 6 }
+  }
+}

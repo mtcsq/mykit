@@ -1,0 +1,8 @@
+{
+  "fit": { "summary": "2 秒 640×360：用 FFmpeg 滤镜图直接出帧，证明 external/adapter 不绑定任何语言或工具。", "genres": ["test"], "goodFor": ["协议验证", "无浏览器管线"], "notFor": ["正式交付"], "placement": "opening" },
+  "duration": { "policy": "fixed", "min": 2, "max": 2, "default": 2 },
+  "materials": [],
+  "copy": [{ "param": "accent", "label": "强调色", "from": ["conversation"], "rule": "#RRGGBB" }],
+  "conversation": ["这是协议示例，用 ffmpeg 滤镜图出帧，不需要浏览器。"],
+  "hostWithoutTools": ["本包只需要 Node 与 ffmpeg，不需要浏览器。"]
+}

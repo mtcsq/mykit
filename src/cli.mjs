@@ -36,7 +36,7 @@ const USAGE = [
   '  mykit encode --frames-dir <dir> --out <file> [--template d]   把已有帧编码成片（跨机拼装用）',
   '  mykit pack   --package <dir> --out <file.zip>                打成单文件（可复现）',
   '  mykit unpack --package <file.zip> --out <dir>                解包（带边界校验）',
-  '  mykit conformance --template <dir|zip> [--span 600]          无状态性检查（并发前提）',
+  '  mykit conformance --template <dir|zip> [--span 240]          无状态性检查（并发前提）',
   '  mykit verify --package <dir|zip>                             契约检查',
   '  mykit integrity build|verify --package <dir>                 生成/校验 SHA-256 清单',
   '  mykit spec                                                    打印契约版本与枚举',
@@ -731,7 +731,7 @@ async function conformanceCmd(options) {
   }
 
   // 连续段上限：检查要跑 0..maxSample，5055 帧的片子会白跑五分钟，默认只查前 600 帧
-  const span = Number(options.span || 600);
+  const span = Number(options.span || 240);
   const limit = Math.min(total - 1, span);
   const samples = options.samples
     ? String(options.samples)

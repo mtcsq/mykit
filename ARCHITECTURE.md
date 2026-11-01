@@ -106,10 +106,17 @@ Remotion 的"延迟渲染计数器"与 Motion Canvas 的"时间可任意求值"�
 2. ✅ **调度改为共享队列**：静态轮转 → work stealing
 3. ✅ **状态依赖可检出**：`mykit conformance`（串行段 vs 孤立帧，PSNR 判据），并发前强制
 
-仍缺（按优先级）：
+全部关闭（2026-11-01 第三轮）：
 
-1. ~~资源计数契约~~ 已实现 `__MYKIT_PENDING`（数字或 Promise），fixture 实测等待 1194 ms
-2. ~~两条 profile~~ 改为 `external/adapter` 协议（ADR-10），Python 适配器已验证
-3. ~~跨机分布式~~ 改为分片 + 拼装（ADR-11），两段渲染 + `encode` 已验证
-4. **conformance 成本偏高**：601 帧片段约 2 分 52 秒
-5. **适配器生态为零**：只有示例包，真实第三方适配器还没人写
+1. ✅ 资源计数契约 `__MYKIT_PENDING`（数字或 Promise），fixture 实测等待 1194 ms
+2. ✅ 两条 profile 改为 `external/adapter` 协议（ADR-10），两种工具链已验证
+3. ✅ 跨机分布式改为分片 + 拼装（ADR-11），两段渲染 + `encode` 已验
+4. ✅ conformance 成本：171.6 s → **20.8 s**（8.3×）。两处改动：孤立帧改成"同一浏览器重载"（省 5 次启动）；
+   默认跨度 600 → 240 帧（892 在 240 帧内仍能被判出 37.55 dB）
+5. ✅ 适配器生态：`external-demo`（Python 标准库写 PNG）+ `ffmpeg-demo`（FFmpeg 滤镜图）两套已验证，
+   另补 `docs/adapter-remotion.md` 说明 Remotion 接法（**未验证**，需 npm 依赖，不与零依赖承诺冲突）
+
+新的观察项（不算缺口）：
+
+- `ffmpeg-demo` 分片渲染 + 拼装与整跑 **MD5 完全相同**（f05121fc），是"无状态模板可精确分片"的硬证据
+- conformance 的判定阈值 45 dB 由两条实测标定：字形抖动 55–60 dB、状态依赖 26–39 dB，中间留了 6 dB 以上余量

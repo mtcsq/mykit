@@ -41,7 +41,9 @@ node src/cli.mjs render --package ops-replay.mykit --out out.mp4   # 直接从�
 - [spec/mykit-template.md](spec/mykit-template.md) —— 包契约（字段、确定性要求、ZIP 边界）
 - [spec/profiles.md](spec/profiles.md) —— `html/canvas` 与 `html/dom` 的能力矩阵与测试要求
 - [templates/ops-replay](templates/ops-replay) —— 第一个自有模板（绘图指令重放）
-- [templates/external-demo](templates/external-demo) —— external/adapter 协议示例（Python 标准库）
+- [templates/external-demo](templates/external-demo) —— external/adapter 示例：Python 标准库写 PNG
+- [templates/ffmpeg-demo](templates/ffmpeg-demo) —— external/adapter 示例：FFmpeg 滤镜图
+- [docs/adapter-remotion.md](docs/adapter-remotion.md) —— 接 Remotion 的参考写法（未验证）
 
 ## 状态
 

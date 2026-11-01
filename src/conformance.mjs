@@ -55,6 +55,7 @@ export async function checkStatelessness(ctx) {
 
   // 会话 A：连续 0..maxFrame，采指定帧
   const a = await openSession(ctx);
+  const serialStarted = Date.now();
   const serial = new Map();
   try {
     for (let frame = 0; frame <= maxFrame; frame += 1) {
@@ -68,32 +69,40 @@ export async function checkStatelessness(ctx) {
   } finally {
     await a.page.close();
   }
+  const serialMs = Date.now() - serialStarted;
 
-  // 会话 B：每帧一个新会话，孤立渲染
+  // 会话 B：同一个浏览器里逐帧"重载后孤立渲染"。
+  // 早先是每帧新起一个浏览器（每个 ~2s 启动），5 帧就 10s 白费；重载页面同样能清空状态，成本低一个数量级。
+  const isoStarted = Date.now();
   const results = [];
-  for (const frame of samples) {
-    const b = await openSession(ctx);
-    let bytes;
-    try {
-      bytes = await shoot(b.page, b.shape, frame, ctx);
-    } finally {
-      await b.page.close();
+  const b = await openSession(ctx);
+  try {
+    for (const frame of samples) {
+      if (results.length > 0) {
+        await b.page.navigate(ctx.origin + '/' + ctx.pagePath);
+        await waitForReady(b.page);
+        await awaitAssets(b.page);
+      }
+      const bytes = await shoot(b.page, b.shape, frame, ctx);
+      const file = path.join(dir, 'isolated-' + frame + '.jpg');
+      fs.writeFileSync(file, bytes);
+      const left = serial.get(frame);
+      const same = left.sha256 === sha256(bytes);
+      // 字节不同不一定是状态依赖：字形缓存/抗锯齿会带来 ~55–60 dB 的微差。
+      // 真正的状态依赖（如 892 的累积墨迹）会掉到 45 dB 以下，两者可以分开。
+      const value = same ? null : psnr(left.file, file);
+      results.push({
+        frame,
+        sha256Serial: left.sha256.slice(0, 16),
+        sha256Isolated: sha256(bytes).slice(0, 16),
+        same,
+        psnr: value === null ? null : Number(value.toFixed(2)),
+      });
     }
-    const file = path.join(dir, 'isolated-' + frame + '.jpg');
-    fs.writeFileSync(file, bytes);
-    const left = serial.get(frame);
-    const same = left.sha256 === sha256(bytes);
-    // 字节不同不一定是状态依赖：字形缓存/抗锯齿会带来 ~55–60 dB 的微差。
-    // 真正的状态依赖（如 892 的累积墨迹）会掉到 30 dB 以下，两者差一个数量级。
-    const value = same ? null : psnr(left.file, file);
-    results.push({
-      frame,
-      sha256Serial: left.sha256.slice(0, 16),
-      sha256Isolated: sha256(bytes).slice(0, 16),
-      same,
-      psnr: value === null ? null : Number(value.toFixed(2)),
-    });
+  } finally {
+    await b.page.close();
   }
+  const isolatedMs = Date.now() - isoStarted;
 
   const minPsnr = ctx.minPsnr ?? 45;
   const threshold = 'PSNR >= ' + minPsnr + '（字节全等也算通过）';
@@ -106,6 +115,7 @@ export async function checkStatelessness(ctx) {
     threshold,
     minPsnr: worst === Infinity ? null : Number(worst.toFixed(2)),
     byteExact: results.every((r) => r.same),
+    timing: { serialMs, isolatedMs, totalMs: serialMs + isolatedMs },
     samples: results,
   };
 }

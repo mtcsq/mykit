@@ -1,0 +1,11 @@
+{
+  "algorithm": "sha256",
+  "files": {
+    "LICENSE": "108f1e2a6cbeab4ec2ff857ee103c55746fb57f9c2bde527c171be2dfa56fae3",
+    "adapter.mjs": "de71a1f9ed9e168f034266e58a208f90942860874ec1eb8936d68bc62319d5cd",
+    "guide.json": "ec78912d5e94e9524f81ae95a9139d9e29f69a046fe129572b7d8d2f811b6c10",
+    "motion.json": "44fca86c15dc5b317fb0231885fde8757333d2c2816d6a4095e061ae86e69b82",
+    "params.schema.json": "63423ad857da43964b32f20fef2a8aa9cdea12e370953720aa120f906a528831",
+    "presets/demo.json": "bd2d73cd19f8fa64b00b0835cffe620e65177683bcfe0bd6bcfd1e0084a96777"
+  }
+}
