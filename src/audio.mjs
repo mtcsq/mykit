@@ -12,13 +12,15 @@ export function probeAudio(file, options = {}) {
   const ffprobePath = options.ffprobePath || process.env.FFPROBE_PATH || 'ffprobe';
   const r = spawnSync(
     ffprobePath,
-    ['-v', 'error', '-show_entries', 'stream=codec_name,channels,sample_rate:format=duration', '-of', 'json', file],
+    ['-v', 'error', '-show_entries', 'stream=codec_type,codec_name,channels,sample_rate:format=duration', '-of', 'json', file],
     { encoding: 'utf8', windowsHide: true },
   );
   if (r.error) throw new Error('ffprobe 执行失败：' + r.error.message);
   if (r.status !== 0) throw new Error('音频不可读：' + (r.stderr || '').trim());
   const data = JSON.parse(r.stdout);
-  const stream = (data.streams || [])[0] || {};
+  const streams = data.streams || [];
+  // 必须挑音轨：成片里第一条流通常是视频，直接取 [0] 会把它当音频报出去
+  const stream = streams.find((s) => s.codec_type === 'audio') || streams[0] || {};
   return {
     codec: stream.codec_name || null,
     channels: stream.channels || null,

@@ -1,0 +1,46 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    # 单元测试只依赖 Node 标准库：不装浏览器、不装 ffmpeg 也能跑
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: 单元测试
+        run: npm test
+      - name: 契约检查（三个包）
+        run: |
+          for p in ops-replay external-demo ffmpeg-demo; do
+            node src/cli.mjs verify --package "templates/$p" | tee "/tmp/verify-$p.json"
+            node -e "const r=require('/tmp/verify-$p.json'); if(!r.ok){console.error(r.errors);process.exit(1)}"
+          done
+      - name: 零依赖断言
+        run: |
+          node -e "const p=require('./package.json'); if(Object.keys(p.dependencies||{}).length) { console.error('不能有 dependencies'); process.exit(1) }"
+
+  integration:
+    # 需要 Chromium 与 ffmpeg：装完才跑，失败也算失败（不做软跳过）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: 安装 ffmpeg 与 chromium
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg chromium-browser || sudo apt-get install -y chromium
+      - name: 集成测试
+        env:
+          CHROME_PATH: /usr/bin/chromium-browser
+        run: |
+          which chromium-browser || which chromium
+          npm run test:int

@@ -58,6 +58,21 @@ node src/cli.mjs render --package ops-replay.mykit --out out.mp4   # 直接从�
 - [x] ZIP 单文件分发（`pack` / `unpack` / 直接从 zip 渲染）
 - [x] 开源发布 v0.1.0
 
+## 测试
+
+```bash
+npm test           # 单元：纯函数 + 契约校验，47 个用例，约 1.2 秒，不需要浏览器/ffmpeg
+npm run test:int   # 集成：真实浏览器 + ffmpeg，6 个用例，约 20 秒
+npm run test:all   # 全部
+```
+
+| 层 | 覆盖 |
+|---|---|
+| 单元 | planFrames（含 29.97 帧率）、ZIP 打包/边界/穿越、safeResolve 路径规则、FFmpeg 参数与色彩链、适配器占位符、契约校验（7 种改坏场景）、完整性清单、浏览器探测 |
+| 集成 | 五种 ready 信号各一例、__MYKIT_PENDING 等待、整片渲染帧数/尺寸、分片+拼装与整跑逐字节一致、音轨挂载 |
+
+CI 见 ```.github/workflows/test.yml```：单元 job 零安装即可跑；集成 job 单独装 chromium + ffmpeg。
+
 ## 已知的坑（实测）
 
 - **profile 声明不可信**：873 写 `html-canvas/1`，页面 canvas 数为 0，必须实测探测
