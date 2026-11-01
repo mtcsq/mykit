@@ -1,0 +1,8 @@
+{
+  "fit": { "summary": "2 秒 640×360 示例：验证 external/adapter 协议（渲染交给包自己的脚本）。", "genres": ["test"], "goodFor": ["协议验证"], "notFor": ["正式交付"], "placement": "opening" },
+  "duration": { "policy": "fixed", "min": 2, "max": 2, "default": 2 },
+  "materials": [],
+  "copy": [{ "param": "label", "label": "标签", "from": ["conversation"], "rule": "1–20 字符" }],
+  "conversation": ["这是协议示例，不是给人用的模板。"],
+  "hostWithoutTools": ["本包需要 Python 3 与 zlib（标准库），不需要浏览器。"]
+}

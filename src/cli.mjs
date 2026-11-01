@@ -20,6 +20,7 @@ import { verifyPackage, SPEC_VERSION, PROFILES, DURATION_POLICIES } from './veri
 import { writeManifest, verifyManifest } from './integrity.mjs';
 import { writeZip, collectDirectory, unpackZip, contentHash } from './zip.mjs';
 import { checkStatelessness } from './conformance.mjs';
+import { runAdapter, adapterCommand } from './adapter.mjs';
 
 const VERSION = '0.1.0';
 const MIN_NODE_MAJOR = 22;
@@ -32,6 +33,7 @@ const USAGE = [
   '  mykit probe  --root <dir> [--page <rel>]              打开页面，报告 ready 信号与 title',
   '  mykit still  --template <dir> --frame <N[,N2]> --out <file>   取静帧',
   '  mykit render --template <dir> --out <file> [--workers N]      整片渲染（可加 --audio <文件>）',
+  '  mykit encode --frames-dir <dir> --out <file> [--template d]   把已有帧编码成片（跨机拼装用）',
   '  mykit pack   --package <dir> --out <file.zip>                打成单文件（可复现）',
   '  mykit unpack --package <file.zip> --out <dir>                解包（带边界校验）',
   '  mykit conformance --template <dir|zip> [--span 600]          无状态性检查（并发前提）',
@@ -177,6 +179,62 @@ function resolveInputs(templateDir, options, runtime) {
   return { inputs: readJson(file), source: file };
 }
 
+async function stillExternal(ctx) {
+  const { templateDir, runtime, inputs, frames, options } = ctx;
+  const dir = path.join(process.cwd(), '.tmp', 'still-ext-' + process.pid);
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  const digest = contentHash(Buffer.from(JSON.stringify(inputs, null, 2)));
+  const inputsFile = path.join(process.cwd(), '.tmp', 'inputs-' + digest + '.json');
+  fs.mkdirSync(path.dirname(inputsFile), { recursive: true });
+  fs.writeFileSync(inputsFile, JSON.stringify(inputs, null, 2));
+
+  const shots = [];
+  for (const frame of frames) {
+    const spec = adapterCommand(runtime, { start: frame, end: frame + 1, framesDir: dir, inputsFile, templateDir });
+    await runAdapter({ ...spec, start: frame, end: frame + 1, framesDir: dir, cwd: templateDir });
+    const jpg = path.join(dir, 'f' + String(frame).padStart(5, '0') + '.jpg');
+    const png = path.join(dir, 'f' + String(frame).padStart(5, '0') + '.png');
+    const file = fs.existsSync(jpg) ? jpg : png;
+    const bytes = fs.readFileSync(file);
+    const outFile =
+      frames.length > 1
+        ? String(options.out).replace(/\.jpg$/, '') + '-f' + frame + path.extname(file)
+        : String(options.out);
+    fs.mkdirSync(path.dirname(path.resolve(outFile)), { recursive: true });
+    fs.writeFileSync(outFile, bytes);
+    shots.push({
+      frame,
+      seconds: Number(runtime.toSeconds(frame).toFixed(6)),
+      out: path.resolve(outFile),
+      bytes: bytes.length,
+      sha256: sha256(bytes),
+      path: 'adapter',
+      fallback: false,
+    });
+  }
+
+  console.log(
+    JSON.stringify(
+      {
+        template: templateDir,
+        profile: runtime.profile,
+        shape: 'adapter',
+        detectedShape: 'adapter',
+        entry: String((runtime.adapter && runtime.adapter.command) || ''),
+        readySignal: null,
+        inputsSource: inputsFile,
+        frames: shots,
+        pageErrors: [],
+        consoleErrors: [],
+      },
+      null,
+      2,
+    ),
+  );
+  return 0;
+}
+
 async function still(options) {
   if (!(options.template || options.package) || options.frame === undefined || !options.out) {
     console.error('still 需要 --template <dir|zip> --frame <N> --out <file>');
@@ -197,6 +255,10 @@ async function still(options) {
   const frames = String(options.frame)
     .split(',')
     .map((s) => Number(s.trim()));
+
+  if (runtime.profile === 'external/adapter') {
+    return stillExternal({ templateDir, runtime, inputs, frames, options });
+  }
 
   const report = await withPage(
     {
@@ -248,8 +310,8 @@ async function still(options) {
 }
 
 async function renderVideo(options) {
-  if (!(options.template || options.package) || !options.out) {
-    console.error('render 需要 --template <dir|zip> --out <file>');
+  if (!(options.template || options.package) || (!options.out && !options['no-encode'])) {
+    console.error('render 需要 --template <dir|zip> --out <file>（--no-encode 只出帧时可省略 --out）');
     return 2;
   }
   const resolved = resolvePackage(options.template || options.package);
@@ -294,7 +356,25 @@ async function renderVideo(options) {
   // 120 帧时串行 7 秒、并发墙钟 27 秒；断点约在 400–500 帧。短片一律走串行。
   const cores = os.cpus().length;
   const autoWorkers = total >= 400 ? Math.max(1, Math.min(8, Math.floor(cores / 4))) : 1;
-  let workers = Number(options.workers || autoWorkers);
+  // 分片渲染：--range a-b 只渲染这一段（配合 --no-encode 落盘，供多机分别跑）
+  let rangeStart = 0;
+  let rangeEnd = total;
+  if (options.range) {
+    const match = String(options.range).match(/^(\d+)-(\d+)$/);
+    if (!match) {
+      console.error('--range 格式应为 a-b（含 a，不含 b），如 0-254');
+      return 2;
+    }
+    rangeStart = Number(match[1]);
+    rangeEnd = Number(match[2]);
+    if (rangeStart >= rangeEnd || rangeEnd > total) {
+      console.error('--range 越界：需满足 0 <= a < b <= ' + total);
+      return 2;
+    }
+  }
+  const framesOnly = Boolean(options['no-encode']);
+
+  let workers = Number(options.workers || (framesOnly ? 1 : autoWorkers));
   let workersFallback = null;
   if (workers > 1 && !(motion.runtime && motion.runtime.stateless === true)) {
     workersFallback = '模板未声明 runtime.stateless，已强制串行（用 mykit conformance 验证后再打开）';
@@ -302,7 +382,24 @@ async function renderVideo(options) {
     workers = 1;
   }
 
-  if (workers > 1) {
+  if (runtime.profile === 'external/adapter') {
+    return renderExternal({
+      templateDir,
+      motion,
+      runtime,
+      total,
+      outFile,
+      inputs,
+      options,
+      rangeStart,
+      rangeEnd,
+      framesOnly,
+      workers,
+      workersFallback,
+    });
+  }
+
+  if (workers > 1 || options.range || framesOnly) {
     return renderParallel({
       templateDir,
       motion,
@@ -316,6 +413,9 @@ async function renderVideo(options) {
       workers,
       options,
       workersFallback,
+      rangeStart,
+      rangeEnd,
+      framesOnly,
     });
   }
 
@@ -402,7 +502,7 @@ async function renderVideo(options) {
 }
 
 async function renderParallel(ctx) {
-  const { templateDir, motion, runtime, shape, total, outFile, inputs, source, quality, workers, options, workersFallback } = ctx;
+  const { templateDir, motion, runtime, shape, total, outFile, inputs, source, quality, workers, options, workersFallback, rangeStart, rangeEnd, framesOnly } = ctx;
   const chrome = findBrowser();
   if (!chrome.available) {
     console.error('找不到浏览器，请设置 CHROME_PATH');
@@ -415,7 +515,8 @@ async function renderParallel(ctx) {
     '-' +
     ((motion.template && motion.template.version) || '0');
   const framesDir = path.resolve(String(options['frames-dir'] || path.join(process.cwd(), '.tmp', 'frames-' + templateKey)));
-  const resume = Boolean(options.resume);
+  // 分片渲染默认续跑：多个进程/多台机器各写一段，谁都不该清空别人的成果
+  const resume = Boolean(options.resume) || framesOnly || Boolean(options.range);
   if (!resume && fs.existsSync(framesDir)) fs.rmSync(framesDir, { recursive: true, force: true });
 
   const server = await serve(templateDir);
@@ -428,6 +529,8 @@ async function renderParallel(ctx) {
       width: runtime.width,
       height: runtime.height,
       total,
+      start: rangeStart,
+      end: rangeEnd,
       workers,
       dir: framesDir,
       declaredShape: shape,
@@ -440,6 +543,33 @@ async function renderParallel(ctx) {
     const renderMs = shards.renderMs;
     const setupMs = shards.setupMs;
     const encodeStarted = Date.now();
+    let encodeMs = 0;
+    let muxed = null;
+    let media = null;
+
+    if (framesOnly) {
+      // 只出帧：多机/多次调用各跑一段，最后用 mykit encode 拼装
+      const reportOnly = {
+        template: templateDir,
+        profile: runtime.profile,
+        shape,
+        detectedShape: shards.workersInfo.length ? shards.workersInfo[0].shape : null,
+        entry: String(options.page || runtime.entry),
+        framesDir,
+        range: [rangeStart, rangeEnd],
+        frames: rangeEnd - rangeStart,
+        workers,
+        workersInfo: shards.workersInfo,
+        skipped: shards.skipped,
+        setupMs: shards.setupMs,
+        renderMs,
+        framesPerSecond: Number(((rangeEnd - rangeStart) / (renderMs / 1000)).toFixed(2)),
+        framesOnly: true,
+      };
+      console.log(JSON.stringify(reportOnly, null, 2));
+      return 0;
+    }
+
     encodeSequence({
       dir: framesDir,
       fps: runtime.fps,
@@ -447,10 +577,9 @@ async function renderParallel(ctx) {
       out: outFile,
       crf: options.crf ? Number(options.crf) : 18,
     });
-    const encodeMs = Date.now() - encodeStarted;
-    const muxed = maybeMuxAudio(options, outFile);
-
-    const media = summarize(probeMedia(outFile));
+    encodeMs = Date.now() - encodeStarted;
+    muxed = maybeMuxAudio(options, outFile);
+    media = summarize(probeMedia(outFile));
     const mismatches = [];
     if (!media.video || media.video.frames !== total) mismatches.push('frames ' + (media.video && media.video.frames) + ' != ' + total);
     if (media.video && media.video.width !== runtime.width) mismatches.push('width ' + media.video.width);
@@ -649,6 +778,121 @@ async function conformanceCmd(options) {
   }
 }
 
+function encodeCmd(options) {
+  const dir = options['frames-dir'];
+  const out = options.out;
+  if (!dir || !out) {
+    console.error('encode 需要 --frames-dir <目录> --out <文件>（fps/帧数可由 --template 推断）');
+    return 2;
+  }
+
+  let fps = Number(options.fps || 0);
+  let frames = Number(options.frames || 0);
+  if (options.template) {
+    const resolved = resolvePackage(options.template);
+    const runtime = describeRuntime(readJson(path.join(resolved.dir, 'motion.json')));
+    fps = fps || runtime.fps;
+    frames = frames || runtime.frameCount || 0;
+  }
+  if (!fps || !frames) {
+    console.error('缺 fps 或帧数：给 --fps/--frames，或用 --template 让内核自己读');
+    return 2;
+  }
+
+  const outFile = path.resolve(String(out));
+  fs.mkdirSync(path.dirname(outFile), { recursive: true });
+  encodeSequence({ dir: path.resolve(String(dir)), fps, frames, out: outFile, crf: options.crf ? Number(options.crf) : 18 });
+  const muxed = maybeMuxAudio(options, outFile);
+  console.log(JSON.stringify({ out: outFile, frames, fps, audio: muxed, media: summarize(probeMedia(outFile)) }, null, 2));
+  return 0;
+}
+
+async function renderExternal(ctx) {
+  const { templateDir, motion, runtime, total, outFile, inputs, options, rangeStart, rangeEnd, framesOnly, workers } = ctx;
+  const templateKey =
+    (motion.template && motion.template.id ? motion.template.id : path.basename(templateDir)) +
+    '-' +
+    ((motion.template && motion.template.version) || '0');
+  const framesDir = path.resolve(String(options['frames-dir'] || path.join(process.cwd(), '.tmp', 'frames-' + templateKey)));
+
+  const inputsFile = path.join(
+    process.cwd(),
+    '.tmp',
+    'inputs-' + contentHash(Buffer.from(JSON.stringify(inputs, null, 2))) + '.json',
+  );
+  fs.mkdirSync(path.dirname(inputsFile), { recursive: true });
+  fs.writeFileSync(inputsFile, JSON.stringify(inputs, null, 2));
+
+  const span = rangeEnd - rangeStart;
+  const shards = Math.max(1, Math.min(workers, span));
+  const per = Math.ceil(span / shards);
+  const jobs = [];
+  for (let i = 0; i < shards; i += 1) {
+    const start = rangeStart + i * per;
+    const end = Math.min(rangeEnd, start + per);
+    if (start < end) jobs.push({ start, end });
+  }
+
+  const started = Date.now();
+  const results = await Promise.all(
+    jobs.map(async (job) => {
+      const spec = adapterCommand(runtime, { start: job.start, end: job.end, framesDir, inputsFile, templateDir });
+      const run = await runAdapter({
+        ...spec,
+        start: job.start,
+        end: job.end,
+        framesDir,
+        cwd: templateDir,
+        timeout: Number(options['adapter-timeout'] || 0),
+        log: (line) => process.stderr.write(line + '\n'),
+      });
+      return { range: [job.start, job.end], frames: run.produced.length };
+    }),
+  );
+  const renderMs = Date.now() - started;
+
+  const base = {
+    template: templateDir,
+    profile: runtime.profile,
+    entry: String((runtime.adapter && runtime.adapter.command) || ''),
+    inputsSource: inputsFile,
+    framesDir,
+    range: [rangeStart, rangeEnd],
+    shards: results,
+    setupMs: 0,
+    renderMs,
+    framesPerSecond: Number((span / (renderMs / 1000)).toFixed(2)),
+  };
+
+  if (framesOnly) {
+    console.log(JSON.stringify({ ...base, frames: span, framesOnly: true }, null, 2));
+    return 0;
+  }
+
+  const outFile2 = path.resolve(String(options.out));
+  fs.mkdirSync(path.dirname(outFile2), { recursive: true });
+  const encodeStarted = Date.now();
+  encodeSequence({ dir: framesDir, fps: runtime.fps, frames: total, out: outFile2, crf: options.crf ? Number(options.crf) : 18 });
+  const encodeMs = Date.now() - encodeStarted;
+  const muxed = maybeMuxAudio(options, outFile2);
+  const media = summarize(probeMedia(outFile2));
+
+  const mismatches = [];
+  if (!media.video || media.video.frames !== total) mismatches.push('frames ' + (media.video && media.video.frames) + ' != ' + total);
+  if (media.video && media.video.width !== runtime.width) mismatches.push('width ' + media.video.width);
+  if (media.video && media.video.height !== runtime.height) mismatches.push('height ' + media.video.height);
+  if (media.video && media.video.primaries !== 'bt709') mismatches.push('primaries ' + media.video.primaries);
+
+  console.log(
+    JSON.stringify(
+      { ...base, out: outFile2, frames: total, encodeMs, audio: muxed, media, ok: mismatches.length === 0, mismatches },
+      null,
+      2,
+    ),
+  );
+  return mismatches.length === 0 ? 0 : 1;
+}
+
 async function main() {
   const { command, positional, options } = parseArgs(process.argv.slice(2));
   switch (command) {
@@ -666,6 +910,8 @@ async function main() {
       return integrityCmd(options, positional[1]);
     case 'conformance':
       return conformanceCmd(options);
+    case 'encode':
+      return encodeCmd(options);
     case 'pack':
       return packCmd(options);
     case 'unpack':

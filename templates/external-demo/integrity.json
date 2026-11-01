@@ -1,0 +1,11 @@
+{
+  "algorithm": "sha256",
+  "files": {
+    "LICENSE": "108f1e2a6cbeab4ec2ff857ee103c55746fb57f9c2bde527c171be2dfa56fae3",
+    "adapter.py": "ef6015d05633da24f2b97fe470bf4658e2e91f5075a3c3ff78be01d3eae3aad6",
+    "guide.json": "b27319e36c87aa4a914975680a1d9db12943290e59ac3380ea57a1afcc4865a3",
+    "motion.json": "7afcef62f0bcb4c8c7243b9a3518def6de4646f42a92b42f4765a1fa0d111bf2",
+    "params.schema.json": "7aa142c8e82d4d0ac0b7acdfa0b66aab16282a0216f7a152a9f5f883b7e12de6",
+    "presets/demo.json": "63eefc846bfdbfca6c589e5e6459339c633dee07c4fa9e6185442c6d96a417c9"
+  }
+}

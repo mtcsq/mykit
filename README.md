@@ -25,6 +25,8 @@
 node src/cli.mjs doctor                                  # 体检：node / 浏览器 / ffmpeg / 内置 WebSocket
 node src/cli.mjs verify --package templates/ops-replay    # 契约检查
 node src/cli.mjs conformance --template templates/ops-replay  # 无状态性检查（并发前提）
+node src/cli.mjs render --template templates/ops-replay --range 0-120 --no-encode --frames-dir .tmp/shards  # 分片
+node src/cli.mjs encode --frames-dir .tmp/shards --template templates/ops-replay --out out.mp4             # 拼装
 node src/cli.mjs still  --template templates/ops-replay --frame 120 --out f120.jpg
 node src/cli.mjs render --template templates/ops-replay --out out.mp4
 node src/cli.mjs render --template templates/ops-replay --out out.mp4 --audio bgm.mp3
@@ -39,6 +41,7 @@ node src/cli.mjs render --package ops-replay.mykit --out out.mp4   # 直接从�
 - [spec/mykit-template.md](spec/mykit-template.md) —— 包契约（字段、确定性要求、ZIP 边界）
 - [spec/profiles.md](spec/profiles.md) —— `html/canvas` 与 `html/dom` 的能力矩阵与测试要求
 - [templates/ops-replay](templates/ops-replay) —— 第一个自有模板（绘图指令重放）
+- [templates/external-demo](templates/external-demo) —— external/adapter 协议示例（Python 标准库）
 
 ## 状态
 

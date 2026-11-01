@@ -1,0 +1,24 @@
+{
+  "format": "mykit-template",
+  "specVersion": "0.1.0",
+  "template": { "id": "external-demo", "version": "1.0.0", "name": "外部适配器示例（Python）", "license": "MIT" },
+  "runtime": {
+    "profile": "external/adapter",
+    "entry": "adapter.py",
+    "stateless": true,
+    "adapter": {
+      "command": "python",
+      "args": ["adapter.py", "--frames", "{start}-{end}", "--out", "{out}", "--inputs", "{inputs}"]
+    }
+  },
+  "output": {
+    "width": 640,
+    "height": 360,
+    "fps": { "num": 24, "den": 1 },
+    "duration": { "policy": "fixed", "seconds": 2, "maxSeconds": 30 }
+  },
+  "parameters": { "schema": "params.schema.json", "defaultPreset": "presets/demo.json" },
+  "guide": "guide.json",
+  "permissions": { "network": false },
+  "integrity": "integrity.json"
+}

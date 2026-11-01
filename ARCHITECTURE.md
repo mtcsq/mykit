@@ -77,6 +77,16 @@ Remotion 的"延迟渲染计数器"与 Motion Canvas 的"时间可任意求值"�
 条目排序 + 固定时间戳（1980-01-01）→ 同一目录打两次字节相同（实测 sha256 一致）。
 读取侧四道边界（条目 5000 / 单文件 150 MiB / 总量 600 MiB / 压缩比 200）+ 条目名禁令，防 zip bomb 与路径穿越。
 
+### ADR-10 外部工具链用协议接入，不写死支持
+原生态的 `native-python-node/1`、`remotion-project/1` 如果写死，内核就得依赖 Python 与 Remotion 打包链。
+改成 `external/adapter`：包自己提供适配器，内核只负责切帧区间、等退出、编码。
+实测 `templates/external-demo`（Python 标准库写 PNG）：48 帧 / 640×360 / 两次渲染 MD5 相同 / 确定性 byteExact=true。
+
+### ADR-11 跨机不造调度器，改为"可分片 + 可拼装"
+`--range a-b --no-encode` 让任意进程/机器只渲染一段并落盘；`mykit encode --frames-dir` 负责拼装。
+实测：自有模板分两段各跑一次（36.9 / 29.7 帧/秒），拼装得到 240 帧 1080p，与整跑 PSNR 51.17 dB（差异来自 ADR-5 的跨会话抖动）。
+这样分布式渲染不需要中心调度器，也不需要内核知道有"集群"这回事。
+
 ## 4. 被否掉的方案（附实测）
 
 | 方案 | 否定理由 | 证据 |
@@ -98,7 +108,8 @@ Remotion 的"延迟渲染计数器"与 Motion Canvas 的"时间可任意求值"�
 
 仍缺（按优先级）：
 
-1. **资源计数契约**（`__MYKIT_PENDING`）：模板目前无法声明"还有 N 个异步资源没到位"
-2. **只覆盖两条 profile**：`native-python-node`、`remotion-project` 不承诺
-3. **conformance 成本偏高**：查 601 帧的片段要 2 分 52 秒（含 5 次孤立会话启动）
-4. **没有跨机分布式**：单机多实例已够用，分布式在单机打满前不谈
+1. ~~资源计数契约~~ 已实现 `__MYKIT_PENDING`（数字或 Promise），fixture 实测等待 1194 ms
+2. ~~两条 profile~~ 改为 `external/adapter` 协议（ADR-10），Python 适配器已验证
+3. ~~跨机分布式~~ 改为分片 + 拼装（ADR-11），两段渲染 + `encode` 已验证
+4. **conformance 成本偏高**：601 帧片段约 2 分 52 秒
+5. **适配器生态为零**：只有示例包，真实第三方适配器还没人写

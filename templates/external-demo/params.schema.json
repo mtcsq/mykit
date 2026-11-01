@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["label"],
+  "properties": {
+    "label": { "type": "string", "title": "标签", "maxLength": 20, "default": "EXTERNAL ADAPTER" },
+    "accent": { "type": "string", "title": "强调色", "pattern": "^#[0-9a-fA-F]{6}$", "default": "#FF4A1C" }
+  }
+}

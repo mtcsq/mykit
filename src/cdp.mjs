@@ -19,6 +19,7 @@ const PROBE_EXPR =
   'promise:!!window.__readyPromise,' +
   'ready:!!(window.ready&&typeof window.ready.then==="function"),' +
   'READY:window.READY===true,' +
+  'pending:(typeof window.__MYKIT_PENDING==="number")?window.__MYKIT_PENDING:((window.__MYKIT_PENDING&&typeof window.__MYKIT_PENDING.then==="function")?"promise":0),' +
   'state:document.readyState,' +
   'title:document.title,' +
   'error:(window.__lastError&&String(window.__lastError.message||window.__lastError))||null' +
@@ -184,21 +185,22 @@ export async function launch(options = {}) {
         return result.result ? result.result.value : undefined;
       },
       async navigate(url) {
-        const loaded = new Promise((resolve) => {
-          const handler = (msg) => {
-            if (msg.method === 'Page.loadEventFired') {
-              socket.removeEventListener('message', handler);
-              resolve();
-            }
-          };
-          socket.addEventListener('message', handler);
-          setTimeout(() => {
-            socket.removeEventListener('message', handler);
-            resolve();
-          }, 20000);
-        });
+        // 不用 Page.loadEventFired：实测这个事件在部分页面根本收不到，等它会白等 20 秒，
+        // 还会把后面的 pending / ready 等待全部推后。改为轮询 readyState 收口。
         await send('Page.navigate', { url });
-        await loaded;
+        const started = Date.now();
+        const limit = options.navigateTimeout ?? 5000;
+        while (Date.now() - started < limit) {
+          let state = 'loading';
+          try {
+            state = await this.evaluate('document.readyState', { awaitPromise: false });
+          } catch {
+            /* 页面切换过程中求值可能失败，重试即可 */
+          }
+          if (state === 'complete') return { state, waitedMs: Date.now() - started };
+          await sleep(20);
+        }
+        return { state: 'timeout', waitedMs: Date.now() - started };
       },
       async close() {
         try {
@@ -268,31 +270,59 @@ export async function waitForReady(page, options = {}) {
   const readyStateGrace = options.readyStateGrace ?? 2000;
   const started = Date.now();
   let probe = null;
+  let signal = null;
+
+  // 先拿到 ready 信号，再等 __MYKIT_PENDING 归零（Remotion 的 delayRender/continueRender 思路）。
+  // 只认数不清的资源会让首帧缺东西——873 的字体就是这么踩的，模板自己声明更可靠。
 
   while (Date.now() - started < timeout) {
     probe = await page.evaluate(PROBE_EXPR, { awaitPromise: false });
 
-    if (probe.mykit) return { signal: '__MYKIT_READY', waitedMs: Date.now() - started, probe };
-    if (probe.motion) return { signal: '__MOTION_READY', waitedMs: Date.now() - started, probe };
+    if (probe.mykit) { signal = '__MYKIT_READY'; break; }
+    if (probe.motion) { signal = '__MOTION_READY'; break; }
     if (probe.promise) {
       await page.evaluate('window.__readyPromise');
-      return { signal: '__readyPromise', waitedMs: Date.now() - started, probe };
+      signal = '__readyPromise';
+      break;
     }
     if (probe.ready) {
       await page.evaluate('window.ready');
-      return { signal: 'ready', waitedMs: Date.now() - started, probe };
+      signal = 'ready';
+      break;
     }
-    if (probe.READY) return { signal: 'READY', waitedMs: Date.now() - started, probe };
+    if (probe.READY) {
+      signal = 'READY';
+      break;
+    }
 
     const elapsed = Date.now() - started;
     if (elapsed >= readyStateGrace && probe.state === 'complete') {
-      return { signal: 'document.readyState', waitedMs: elapsed, probe };
+      signal = 'document.readyState';
+      break;
     }
     await sleep(interval);
   }
 
-  throw new ReadyTimeoutError('等待页面 ready 超时（' + timeout + 'ms）', {
-    lastProbe: probe,
-    pageErrors: page.errors,
-  });
+  if (!signal) {
+    throw new ReadyTimeoutError('等待页面 ready 超时（' + timeout + 'ms）', {
+      lastProbe: probe,
+      pageErrors: page.errors,
+    });
+  }
+
+  const pendingStarted = Date.now();
+  let pendingWaitedMs = 0;
+  while (Date.now() - pendingStarted < timeout) {
+    const state = await page.evaluate(PROBE_EXPR, { awaitPromise: false });
+    if (state.pending === 'promise') {
+      await page.evaluate('window.__MYKIT_PENDING');
+      pendingWaitedMs = Date.now() - pendingStarted;
+      break;
+    }
+    if (!state.pending) break;
+    await sleep(interval);
+    pendingWaitedMs = Date.now() - pendingStarted;
+  }
+
+  return { signal, waitedMs: Date.now() - started, pendingWaitedMs, probe };
 }

@@ -33,6 +33,8 @@ export async function renderShards(options) {
     inputs,
     quality = 0.93,
     resume = true,
+    start = 0,
+    end = total,
     log = () => {},
   } = options;
 
@@ -40,12 +42,12 @@ export async function renderShards(options) {
 
   const todo = [];
   let skipped = 0;
-  for (let frame = 0; frame < total; frame += 1) {
+  for (let frame = start; frame < end; frame += 1) {
     if (resume && fs.existsSync(frameFile(dir, frame))) skipped += 1;
     else todo.push(frame);
   }
 
-  if (!todo.length) return { frames: total, workersInfo: [], skipped, setupMs: 0, renderMs: 0 };
+  if (!todo.length) return { frames: end - start, workersInfo: [], skipped, setupMs: 0, renderMs: 0 };
 
   const pageCount = Math.min(workers, todo.length);
   const setupStarted = Date.now();
@@ -91,7 +93,7 @@ export async function renderShards(options) {
       }),
     );
 
-    return { frames: total, workersInfo, skipped, setupMs, renderMs: Date.now() - renderStarted };
+    return { frames: end - start, workersInfo, skipped, setupMs, renderMs: Date.now() - renderStarted };
   } finally {
     for (const page of pages) await page.close();
   }

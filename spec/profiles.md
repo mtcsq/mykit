@@ -45,3 +45,21 @@
 2. 确定性：`node test/determinism.mjs --template <dir> --frame <n> --prev <n-1>`
 3. 整片：`mykit render` 的 `nb_frames / 分辨率 / fps / bt709` 与 motion.json 一致
 4. 并发（仅 canvas）：`--workers 4` 与串行画面 MD5 相同
+
+## external/adapter
+
+给"用别的工具链渲染"用的 profile。内核不认任何具体工具，只认一个约定。
+
+| 项 | 要求 |
+|---|---|
+| 声明 | `runtime.profile = "external/adapter"`，`runtime.adapter.command` 必填，`runtime.adapter.args` 可选 |
+| 占位符 | `{start}` `{end}` `{out}` `{inputs}` `{template}` |
+| 产出 | 在 `{out}` 目录写 `fNNNNN.jpg` 或 `fNNNNN.png`（5 位补零），覆盖 `[start, end)` |
+| 约定 | 退出码 0 = 成功；缺帧会被内核判失败并列出缺哪几帧 |
+| 工作目录 | 内核把 cwd 设为包目录，适配器可以用相对路径引用自己的脚本 |
+| 确定性 | 适配器自己保证；内核用 `test/determinism.mjs` 验（实测示例包 byteExact=true） |
+
+为什么这样设计：原生态的 `native-python-node/1`（3 个包）和 `remotion-project/1`（1 个包）如果逐个写死支持，
+内核就要依赖 Python、懂 Remotion 的打包，违反零依赖。改成协议后，任何工具链都能接，内核一行不改。
+
+参考实现：`templates/external-demo/adapter.py`（纯标准库写 PNG，48 帧 640×360，两次渲染 MD5 相同）。

@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>mykit pending fixture</title>
+<body>
+<h1>pending</h1>
+<script>
+  // 模拟"页面已 ready，但还有 2 个异步资源没到位"（每个 600ms，足够观测等待）
+  window.__MYKIT_READY = true;
+  window.__MYKIT_PENDING = 2;
+  var n = 2;
+  function tick() {
+    n -= 1;
+    window.__MYKIT_PENDING = n;
+    if (n > 0) setTimeout(tick, 600);
+  }
+  setTimeout(tick, 600);
+</script>
+</body>
+</html>

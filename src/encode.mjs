@@ -4,6 +4,8 @@
  * 色彩链参数取自 626/_inner/render.mjs:20 的实测写法（sRGB JPEG -> BT.709 限幅），
  * 参数原样复用、代码全新实现。
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 
@@ -82,7 +84,15 @@ export function createEncoder(options) {
 /** 从 JPEG 序列编码（并发渲染落盘后走这条路，比共享管道简单且可断点续跑）。 */
 export function encodeSequence(options) {
   const ffmpegPath = options.ffmpegPath || process.env.FFMPEG_PATH || 'ffmpeg';
-  const input = options.dir + '/f%05d.jpg';
+  // 适配器可能产出 png（Python 标准库只能直接写 png），按目录里的第一帧探测扩展名
+  const ext =
+    options.ext ||
+    (fs.existsSync(path.join(options.dir, 'f00000.jpg'))
+      ? 'jpg'
+      : fs.existsSync(path.join(options.dir, 'f00000.png'))
+        ? 'png'
+        : 'jpg');
+  const input = options.dir + '/f%05d.' + ext;
   const args = [
     '-y',
     '-v', 'error',

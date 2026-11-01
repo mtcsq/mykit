@@ -138,6 +138,8 @@ export function describeRuntime(motion) {
     height: output.height || 1080,
     fps,
     den,
+    adapter: runtime.adapter || null,
+    stateless: runtime.stateless === true,
     toSeconds: (f) => (f * den) / fps,
     frameCount: frames,
     durationPolicy: policy,

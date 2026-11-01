@@ -8,7 +8,7 @@ import path from 'node:path';
 import { verifyManifest } from './integrity.mjs';
 
 export const SPEC_VERSION = '0.1.0';
-export const PROFILES = ['html/canvas', 'html/dom'];
+export const PROFILES = ['html/canvas', 'html/dom', 'external/adapter'];
 export const DURATION_POLICIES = ['fixed', 'fit-voiceover', 'fit-content'];
 export const LICENSES = ['MIT', 'Apache-2.0', 'BSD-3-Clause', 'ISC', 'CC0-1.0'];
 
@@ -76,6 +76,14 @@ export function verifyPackage(packageDir) {
   const runtime = motion.runtime || {};
   if (!PROFILES.includes(runtime.profile)) errors.push('runtime.profile 必须是 ' + PROFILES.join(' / ') + '，实际 ' + JSON.stringify(runtime.profile));
   checkInside(dir, runtime.entry, errors, 'runtime.entry');
+  if (runtime.profile === 'external/adapter') {
+    const adapter = runtime.adapter || {};
+    if (!adapter.command) errors.push('external/adapter 必须在 runtime.adapter.command 声明可执行程序');
+    if (adapter.args !== undefined && !Array.isArray(adapter.args)) errors.push('runtime.adapter.args 必须是数组');
+    if (runtime.entry && !fs.existsSync(path.resolve(dir, runtime.entry))) {
+      warnings.push('runtime.entry 指向的文件不存在（external/adapter 可忽略）');
+    }
+  }
   if (runtime.stateless !== undefined && typeof runtime.stateless !== 'boolean') {
     errors.push('runtime.stateless 若出现必须是布尔值（声明后可并发，需先过 mykit conformance）');
   }
